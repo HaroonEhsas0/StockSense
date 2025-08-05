@@ -18,12 +18,18 @@ from dataclasses import dataclass
 try:
     import yfinance as yf
     from sklearn.linear_model import LinearRegression
-    from sklearn.preprocessing import StandardScaler
+    from sklearn.preprocessing import StandardScaler, MinMaxScaler
+    from sklearn.ensemble import RandomForestRegressor
+    from sklearn.metrics import mean_absolute_error
 except ImportError as e:
     print(f"❌ Missing required library: {e}")
     print("Please install required packages:")
-    print("pip install yfinance scikit-learn pandas numpy requests")
+    print("pip install yfinance scikit-learn pandas numpy requests tensorflow")
     sys.exit(1)
+
+# LSTM functionality disabled due to compatibility issues
+# Will use enhanced traditional ML models instead
+LSTM_AVAILABLE = False
 
 @dataclass
 class StockData:
@@ -48,6 +54,9 @@ class Prediction:
     confidence: float
     signal: str  # BUY, SELL, WAIT
     price_target: Optional[float] = None
+    stop_loss: Optional[float] = None
+    take_profit: Optional[float] = None
+    risk_reward_ratio: Optional[float] = None
 
 class StockPredictor:
     """Main class for AMD stock prediction system"""
@@ -58,9 +67,22 @@ class StockPredictor:
         self.running = True
         self.eodhd_api_key = os.getenv("EODHD_API_KEY", "demo")
         self.historical_data = []
-        self.scaler = StandardScaler()
-        self.model = LinearRegression()
+        
+        # Multiple models for ensemble predictions
+        self.scaler = MinMaxScaler()
+        self.linear_model = LinearRegression()
+        self.rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
+        self.lstm_model = None
         self.model_trained = False
+        self.lstm_trained = False
+        
+        # Trading system parameters
+        self.risk_tolerance = 0.02  # 2% risk per trade
+        self.reward_ratio = 2.0     # 2:1 reward-to-risk ratio
+        
+        # Performance tracking
+        self.prediction_history = []
+        self.accuracy_score = 0.0
         
         # Setup signal handler for graceful exit
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -226,12 +248,70 @@ class StockPredictor:
         ]
         return np.array(features).reshape(1, -1)
         
-    def train_model(self, historical_data: List[StockData]) -> bool:
-        """Train the machine learning model with historical data"""
+    def create_lstm_model(self, input_shape):
+        """Create LSTM model architecture"""
+        if not LSTM_AVAILABLE:
+            return None
+            
+        model = Sequential([
+            LSTM(50, return_sequences=True, input_shape=input_shape),
+            Dropout(0.2),
+            LSTM(50, return_sequences=True),
+            Dropout(0.2),
+            LSTM(50),
+            Dropout(0.2),
+            Dense(25),
+            Dense(1)
+        ])
+        
+        model.compile(optimizer=Adam(learning_rate=0.001), 
+                     loss='mean_squared_error',
+                     metrics=['mae'])
+        return model
+    
+    def prepare_lstm_data(self, historical_data: List[StockData], lookback=10):
+        """Prepare data for LSTM training"""
+        if len(historical_data) < lookback + 5:
+            return None, None
+            
+        # Create feature matrix
+        features = []
+        for data in historical_data:
+            feature_vector = [
+                data.current_price,
+                data.previous_close,
+                (data.current_price - data.previous_close) / data.previous_close * 100,
+                data.sma_20,
+                data.rsi_14,
+                data.volume / 1000000,
+                (data.day_high - data.day_low) / data.current_price * 100,
+                data.price_change_15m,
+                data.price_change_30m,
+                data.price_change_1h
+            ]
+            features.append(feature_vector)
+            
+        features = np.array(features)
+        
+        # Create sequences for LSTM
+        X, y = [], []
+        for i in range(lookback, len(features)):
+            X.append(features[i-lookback:i])
+            # Target: next price change percentage
+            current_price = historical_data[i-1].current_price
+            next_price = historical_data[i].current_price
+            price_change = (next_price - current_price) / current_price * 100
+            y.append(price_change)
+            
+        return np.array(X), np.array(y)
+    
+    def train_models(self, historical_data: List[StockData]) -> bool:
+        """Train multiple ML models with historical data"""
         try:
-            if len(historical_data) < 10:
+            if len(historical_data) < 15:
                 return False
                 
+            # Prepare traditional ML features
             features = []
             targets = []
             
@@ -239,7 +319,7 @@ class StockPredictor:
                 current_data = historical_data[i]
                 next_data = historical_data[i + 1]
                 
-                # Prepare features
+                # Enhanced features
                 feature_vector = [
                     current_data.current_price,
                     current_data.previous_close,
@@ -248,6 +328,13 @@ class StockPredictor:
                     current_data.rsi_14,
                     current_data.volume / 1000000,
                     (current_data.day_high - current_data.day_low) / current_data.current_price * 100,
+                    current_data.price_change_15m,
+                    current_data.price_change_30m,
+                    current_data.price_change_1h,
+                    # Price relative to SMA
+                    (current_data.current_price - current_data.sma_20) / current_data.sma_20 * 100,
+                    # Volatility indicator
+                    abs(current_data.price_change_15m) + abs(current_data.price_change_30m) + abs(current_data.price_change_1h)
                 ]
                 
                 # Calculate target (future price change)
@@ -256,7 +343,7 @@ class StockPredictor:
                 features.append(feature_vector)
                 targets.append(price_change)
                 
-            if len(features) < 5:
+            if len(features) < 10:
                 return False
                 
             X = np.array(features)
@@ -265,20 +352,108 @@ class StockPredictor:
             # Scale features
             X_scaled = self.scaler.fit_transform(X)
             
-            # Train model
-            self.model.fit(X_scaled, y)
-            self.model_trained = True
+            # Train traditional models
+            self.linear_model.fit(X_scaled, y)
+            self.rf_model.fit(X_scaled, y)
             
+            # Train LSTM if available and enough data
+            if LSTM_AVAILABLE and len(historical_data) >= 25:
+                X_lstm, y_lstm = self.prepare_lstm_data(historical_data)
+                if X_lstm is not None and len(X_lstm) > 10:
+                    # Scale LSTM data
+                    original_shape = X_lstm.shape
+                    X_lstm_reshaped = X_lstm.reshape(-1, X_lstm.shape[-1])
+                    X_lstm_scaled = self.scaler.fit_transform(X_lstm_reshaped)
+                    X_lstm_scaled = X_lstm_scaled.reshape(original_shape)
+                    
+                    # Create and train LSTM
+                    self.lstm_model = self.create_lstm_model((X_lstm.shape[1], X_lstm.shape[2]))
+                    if self.lstm_model:
+                        self.lstm_model.fit(X_lstm_scaled, y_lstm, 
+                                          epochs=50, batch_size=8, verbose=0,
+                                          validation_split=0.2)
+                        self.lstm_trained = True
+            
+            self.model_trained = True
             return True
             
         except Exception as e:
             print(f"❌ Model training error: {e}")
             return False
             
+    def get_ensemble_prediction(self, stock_data: StockData) -> Tuple[float, float]:
+        """Get ensemble prediction from multiple models"""
+        predictions = []
+        confidences = []
+        
+        if self.model_trained:
+            features = self.prepare_features(stock_data)
+            features_scaled = self.scaler.transform(features)
+            
+            # Linear regression prediction
+            linear_pred = self.linear_model.predict(features_scaled)[0]
+            predictions.append(linear_pred)
+            confidences.append(0.3)  # Weight
+            
+            # Random Forest prediction
+            rf_pred = self.rf_model.predict(features_scaled)[0]
+            predictions.append(rf_pred)
+            confidences.append(0.4)  # Weight
+            
+            # LSTM prediction if available
+            if self.lstm_trained and self.lstm_model and len(self.historical_data) >= 10:
+                try:
+                    # Prepare LSTM input
+                    lstm_features = []
+                    for data in self.historical_data[-10:]:
+                        feature_vector = [
+                            data.current_price, data.previous_close,
+                            (data.current_price - data.previous_close) / data.previous_close * 100,
+                            data.sma_20, data.rsi_14, data.volume / 1000000,
+                            (data.day_high - data.day_low) / data.current_price * 100,
+                            data.price_change_15m, data.price_change_30m, data.price_change_1h
+                        ]
+                        lstm_features.append(feature_vector)
+                    
+                    lstm_input = np.array(lstm_features).reshape(1, 10, 10)
+                    lstm_input_scaled = self.scaler.transform(lstm_input.reshape(-1, 10)).reshape(1, 10, 10)
+                    lstm_pred = self.lstm_model.predict(lstm_input_scaled, verbose=0)[0][0]
+                    predictions.append(lstm_pred)
+                    confidences.append(0.3)  # Weight
+                except:
+                    pass
+        
+        if predictions:
+            # Weighted average
+            ensemble_pred = np.average(predictions, weights=confidences[:len(predictions)])
+            ensemble_conf = np.mean(confidences[:len(predictions)]) * 100
+            return ensemble_pred, min(ensemble_conf + abs(ensemble_pred) * 15, 95)
+        
+        return 0.0, 50.0
+
+    def calculate_risk_management(self, stock_data: StockData, predicted_change: float, signal: str) -> Tuple[float, float, float]:
+        """Calculate stop loss, take profit, and risk-reward ratio"""
+        current_price = stock_data.current_price
+        
+        if signal == "BUY":
+            stop_loss = current_price * (1 - self.risk_tolerance)
+            take_profit = current_price * (1 + self.risk_tolerance * self.reward_ratio)
+        elif signal == "SELL":
+            stop_loss = current_price * (1 + self.risk_tolerance)
+            take_profit = current_price * (1 - self.risk_tolerance * self.reward_ratio)
+        else:
+            return None, None, None
+            
+        risk_amount = abs(current_price - stop_loss)
+        reward_amount = abs(take_profit - current_price)
+        risk_reward_ratio = reward_amount / risk_amount if risk_amount > 0 else 0
+        
+        return stop_loss, take_profit, risk_reward_ratio
+
     def predict_price_movement(self, stock_data: StockData) -> Prediction:
-        """Predict price movement using ML model and technical analysis"""
+        """Advanced prediction using ensemble models and risk management"""
         try:
-            # Basic technical analysis fallback
+            # Technical analysis indicators
             rsi_signal = "WAIT"
             if stock_data.rsi_14 > 70:
                 rsi_signal = "SELL"
@@ -286,53 +461,52 @@ class StockPredictor:
                 rsi_signal = "BUY"
                 
             sma_trend = "STABLE"
-            if stock_data.current_price > stock_data.sma_20 * 1.02:
+            if stock_data.current_price > stock_data.sma_20 * 1.015:
                 sma_trend = "UP"
-            elif stock_data.current_price < stock_data.sma_20 * 0.98:
+            elif stock_data.current_price < stock_data.sma_20 * 0.985:
                 sma_trend = "DOWN"
-                
-            # If model is trained, use ML prediction
-            if self.model_trained:
-                features = self.prepare_features(stock_data)
-                features_scaled = self.scaler.transform(features)
-                predicted_change = self.model.predict(features_scaled)[0]
-                
-                # Calculate confidence based on model certainty and technical indicators
-                confidence = min(abs(predicted_change) * 10 + 50, 95)
-                
-                if predicted_change > 1.0:
+            
+            momentum_score = (stock_data.price_change_15m + stock_data.price_change_30m + stock_data.price_change_1h) / 3
+            
+            # Get ensemble prediction
+            predicted_change, base_confidence = self.get_ensemble_prediction(stock_data)
+            
+            # Enhanced decision logic
+            if self.model_trained and abs(predicted_change) > 0.3:
+                # Use ML prediction with technical confirmation
+                if predicted_change > 0.8:
                     direction = "UP"
-                    signal = "BUY" if rsi_signal != "SELL" else "WAIT"
-                elif predicted_change < -1.0:
-                    direction = "DOWN"
-                    signal = "SELL" if rsi_signal != "BUY" else "WAIT"
+                    signal = "BUY" if rsi_signal != "SELL" and momentum_score > -0.3 else "WAIT"
+                elif predicted_change < -0.8:
+                    direction = "DOWN"  
+                    signal = "SELL" if rsi_signal != "BUY" and momentum_score < 0.3 else "WAIT"
                 else:
                     direction = "STABLE"
                     signal = "WAIT"
                     
+                confidence = min(base_confidence * (1 + abs(predicted_change) / 5), 95)
                 price_target = stock_data.current_price * (1 + predicted_change / 100)
                 
             else:
-                # Enhanced technical analysis with momentum
-                momentum_score = (stock_data.price_change_15m + stock_data.price_change_30m + stock_data.price_change_1h) / 3
+                # Enhanced technical analysis
+                strong_momentum = abs(momentum_score) > 0.5
                 
-                # Consider both trend and momentum
-                if sma_trend == "UP" and stock_data.rsi_14 < 70 and momentum_score > -0.2:
+                if sma_trend == "UP" and stock_data.rsi_14 < 65 and momentum_score > -0.2:
                     direction = "UP"
-                    signal = "BUY"
-                    confidence = min(60.0 + abs(momentum_score) * 10, 85.0)
-                elif sma_trend == "DOWN" and stock_data.rsi_14 > 30 and momentum_score < 0.2:
+                    signal = "BUY" if not (stock_data.rsi_14 > 70) else "WAIT"
+                    confidence = min(65.0 + abs(momentum_score) * 10, 85.0)
+                elif sma_trend == "DOWN" and stock_data.rsi_14 > 35 and momentum_score < 0.2:
+                    direction = "DOWN"
+                    signal = "SELL" if not (stock_data.rsi_14 < 30) else "WAIT"
+                    confidence = min(65.0 + abs(momentum_score) * 10, 85.0)
+                elif momentum_score < -0.7:  # Strong bearish momentum
                     direction = "DOWN"
                     signal = "SELL"
-                    confidence = min(60.0 + abs(momentum_score) * 10, 85.0)
-                elif momentum_score < -0.5:  # Strong negative momentum
-                    direction = "DOWN"
-                    signal = "SELL"
-                    confidence = 65.0
-                elif momentum_score > 0.5:   # Strong positive momentum
+                    confidence = 75.0
+                elif momentum_score > 0.7:   # Strong bullish momentum
                     direction = "UP"
                     signal = "BUY"
-                    confidence = 65.0
+                    confidence = 75.0
                 else:
                     direction = "STABLE"
                     signal = "WAIT"
@@ -340,12 +514,30 @@ class StockPredictor:
                     
                 price_target = None
                 
-            return Prediction(
+            # Calculate risk management
+            stop_loss, take_profit, risk_reward = self.calculate_risk_management(
+                stock_data, predicted_change, signal
+            )
+            
+            prediction = Prediction(
                 direction=direction,
                 confidence=confidence,
                 signal=signal,
-                price_target=price_target
+                price_target=price_target,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                risk_reward_ratio=risk_reward
             )
+            
+            # Track prediction for accuracy calculation
+            self.prediction_history.append({
+                'timestamp': stock_data.timestamp,
+                'prediction': predicted_change,
+                'actual_price': stock_data.current_price,
+                'signal': signal
+            })
+            
+            return prediction
             
         except Exception as e:
             print(f"❌ Prediction error: {e}")
@@ -395,21 +587,48 @@ class StockPredictor:
             rsi_status = "🟡 Neutral"
         print(f"   RSI Status:        {rsi_status}")
         
+        # Momentum analysis
+        momentum = (stock_data.price_change_15m + stock_data.price_change_30m + stock_data.price_change_1h) / 3
+        momentum_status = "🚀 Strong Up" if momentum > 0.5 else "📉 Strong Down" if momentum < -0.5 else "➡️ Neutral"
+        print(f"   Momentum Score:    {momentum:+.2f}% ({momentum_status})")
+        
         # Prediction Section
         direction_emoji = {"UP": "🚀", "DOWN": "📉", "STABLE": "➡️"}
-        signal_emoji = {"BUY": "🟢", "SELL": "🔴", "WAIT": "🟡"}
+        signal_emoji = {"BUY": "🟢 BUY", "SELL": "🔴 SELL", "WAIT": "🟡 WAIT"}
         
-        print(f"\n🤖 AI PREDICTION:")
+        print(f"\n🤖 AI PREDICTION & TRADING SIGNALS:")
         print(f"   Direction:         {direction_emoji.get(prediction.direction, '❓')} {prediction.direction}")
         print(f"   Confidence:        {prediction.confidence:.1f}%")
-        print(f"   Trading Signal:    {signal_emoji.get(prediction.signal, '❓')} {prediction.signal}")
+        print(f"   Trading Signal:    {signal_emoji.get(prediction.signal, '❓')}")
         
         if prediction.price_target:
-            print(f"   Price Target:      ${prediction.price_target:.2f}")
+            target_change = ((prediction.price_target - stock_data.current_price) / stock_data.current_price) * 100
+            print(f"   Price Target:      ${prediction.price_target:.2f} ({target_change:+.1f}%)")
             
+        # Risk Management
+        if prediction.stop_loss and prediction.take_profit:
+            print(f"\n💰 RISK MANAGEMENT:")
+            print(f"   Stop Loss:         ${prediction.stop_loss:.2f}")
+            print(f"   Take Profit:       ${prediction.take_profit:.2f}")
+            if prediction.risk_reward_ratio:
+                print(f"   Risk/Reward:       1:{prediction.risk_reward_ratio:.1f}")
+                
         # Model Status
-        model_status = "✅ TRAINED" if self.model_trained else "⚠️  LEARNING"
-        print(f"   Model Status:      {model_status}")
+        models_active = []
+        if self.model_trained:
+            models_active.append("Linear+RF")
+        if self.lstm_trained:
+            models_active.append("LSTM")
+            
+        if models_active:
+            model_status = f"✅ ACTIVE: {'+'.join(models_active)}"
+        else:
+            model_status = "⚠️  LEARNING"
+        print(f"\n   Model Status:      {model_status}")
+        
+        # Accuracy tracking
+        if len(self.prediction_history) > 5:
+            print(f"   Prediction History: {len(self.prediction_history)} signals tracked")
         
         print(f"\n🔄 Next update in {self.refresh_interval//60} minutes...")
         print(f"📝 Historical data points: {len(self.historical_data)}")
@@ -442,13 +661,14 @@ class StockPredictor:
                 if len(self.historical_data) > 100:
                     self.historical_data = self.historical_data[-100:]
                     
-                # Train model if we have enough data
-                if len(self.historical_data) >= 10 and not self.model_trained:
-                    print("🧠 Training machine learning model...")
-                    self.train_model(self.historical_data)
-                elif len(self.historical_data) >= 20:
+                # Train models if we have enough data
+                if len(self.historical_data) >= 15 and not self.model_trained:
+                    print("🧠 Training machine learning models...")
+                    self.train_models(self.historical_data)
+                elif len(self.historical_data) >= 30 and len(self.historical_data) % 10 == 0:
                     # Retrain periodically with new data
-                    self.train_model(self.historical_data)
+                    print("🔄 Retraining models with new data...")
+                    self.train_models(self.historical_data)
                     
                 # Make prediction
                 prediction = self.predict_price_movement(stock_data)

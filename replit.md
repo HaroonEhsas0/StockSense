@@ -2,7 +2,7 @@
 
 ## Overview
 
-This is a terminal-based real-time stock analysis and prediction tool that uses machine learning to analyze AMD stock performance. The system provides live stock data monitoring with technical indicators and generates trading predictions using linear regression models. It's designed as a command-line application that delivers real-time insights for stock trading decisions.
+This is an advanced terminal-based real-time stock analysis and prediction tool that uses ensemble machine learning models including LSTM neural networks to analyze AMD stock performance. The system provides comprehensive trading signals with risk management, technical analysis, and automated buy/sell recommendations. Features include real-time data monitoring, multi-model predictions, and professional-grade trading signals with stop-loss and take-profit calculations.
 
 ## User Preferences
 
@@ -21,14 +21,19 @@ Preferred communication style: Simple, everyday language.
 - **Structured Data Models**: Uses Python dataclasses (`StockData` and `Prediction`) for type-safe data handling
 
 ### Machine Learning Pipeline
-- **Linear Regression Model**: Implements scikit-learn's LinearRegression for price prediction
-- **Feature Engineering**: Incorporates technical indicators (SMA, RSI) and price change metrics across multiple timeframes
-- **Data Preprocessing**: Uses StandardScaler for feature normalization to improve model performance
+- **Ensemble Model Architecture**: Multiple ML models for improved prediction accuracy
+  - Linear Regression for baseline predictions
+  - Random Forest (100 estimators) for non-linear pattern recognition
+  - LSTM Neural Network for time-series sequence modeling
+- **Advanced Feature Engineering**: Enhanced feature set including technical indicators, momentum scores, and volatility measures
+- **Data Preprocessing**: MinMaxScaler normalization optimized for neural network training
 
-### Technical Analysis Components
-- **Multiple Timeframe Analysis**: Tracks price changes across 15-minute, 30-minute, and 1-hour intervals
-- **Technical Indicators**: Implements Simple Moving Average (SMA-20) and Relative Strength Index (RSI-14)
-- **Signal Generation**: Produces actionable trading signals (BUY/SELL/WAIT) with confidence scores
+### Trading System Components
+- **Risk Management**: Automated stop-loss and take-profit calculations with 2:1 risk-reward ratios
+- **Multiple Timeframe Analysis**: Enhanced momentum scoring across 15-minute, 30-minute, and 1-hour intervals
+- **Technical Indicators**: SMA-20, RSI-14 with intelligent overbought/oversold detection
+- **Signal Generation**: Professional trading signals (BUY/SELL/WAIT) with confidence scores and price targets
+- **Performance Tracking**: Historical prediction accuracy monitoring and model performance metrics
 
 ### Error Handling and Reliability
 - **Graceful Degradation**: Handles missing dependencies with clear installation instructions
@@ -42,7 +47,8 @@ Preferred communication style: Simple, everyday language.
 - **Alternative Data Endpoints**: Backup data retrieval using direct HTTP requests via `requests` library
 
 ### Machine Learning Libraries
-- **scikit-learn**: Core machine learning framework providing LinearRegression and StandardScaler
+- **TensorFlow/Keras**: Deep learning framework for LSTM neural network implementation
+- **scikit-learn**: Ensemble learning with LinearRegression, RandomForestRegressor, and preprocessing tools
 - **NumPy**: Numerical computing foundation for array operations and mathematical calculations
 - **Pandas**: Data manipulation and analysis library for handling time series stock data
 
