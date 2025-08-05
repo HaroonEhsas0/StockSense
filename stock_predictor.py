@@ -57,6 +57,7 @@ class Prediction:
     stop_loss: Optional[float] = None
     take_profit: Optional[float] = None
     risk_reward_ratio: Optional[float] = None
+    price_range_30m: Optional[tuple] = None  # (low, high) for 30-min prediction
 
 class StockPredictor:
     """Main class for AMD stock prediction system"""
@@ -454,6 +455,67 @@ class StockPredictor:
         
         return stop_loss, take_profit, risk_reward_ratio
 
+    def calculate_30min_price_range(self, stock_data: StockData) -> tuple:
+        """Calculate accurate 30-minute price range prediction based on comprehensive analysis"""
+        
+        # Base volatility from recent movements
+        recent_volatility = (abs(stock_data.price_change_15m) + abs(stock_data.price_change_30m)) / 2
+        
+        # Volume-adjusted volatility multiplier
+        volume_multiplier = 1.0
+        if stock_data.volume > 50000000:  # Very high volume
+            volume_multiplier = 1.4
+        elif stock_data.volume > 45000000:  # High volume
+            volume_multiplier = 1.2
+        elif stock_data.volume < 30000000:  # Low volume
+            volume_multiplier = 0.8
+            
+        # RSI-based range adjustment
+        rsi_pressure = 0.0
+        if stock_data.rsi_14 > 70:  # Overbought - expect wider downside range
+            rsi_pressure = -0.15
+        elif stock_data.rsi_14 < 30:  # Oversold - expect wider upside range
+            rsi_pressure = +0.15
+        elif stock_data.rsi_14 > 65:  # Moderately overbought
+            rsi_pressure = -0.08
+        elif stock_data.rsi_14 < 35:  # Moderately oversold
+            rsi_pressure = +0.08
+            
+        # Momentum impact on range direction
+        momentum = (stock_data.price_change_15m + stock_data.price_change_30m + stock_data.price_change_1h) / 3
+        momentum_bias = momentum * 0.3  # 30% of current momentum continues
+        
+        # Support/resistance levels based on SMA
+        sma_distance = (stock_data.current_price - stock_data.sma_20) / stock_data.sma_20 * 100
+        if sma_distance > 10:  # Far above SMA - resistance expected
+            resistance_pressure = -0.12
+        elif sma_distance > 8:  # Above SMA
+            resistance_pressure = -0.06
+        else:
+            resistance_pressure = 0.0
+            
+        # Calculate base range (typical 30-min movement)
+        base_range_pct = max(recent_volatility * volume_multiplier, 0.15)  # Minimum 0.15%
+        base_range_pct = min(base_range_pct, 0.8)  # Maximum 0.8%
+        
+        # Apply directional biases
+        total_bias = momentum_bias + rsi_pressure + resistance_pressure
+        
+        # Calculate price range
+        range_amount = stock_data.current_price * (base_range_pct / 100)
+        
+        if total_bias > 0:  # Bullish bias
+            price_low = stock_data.current_price - (range_amount * 0.3)
+            price_high = stock_data.current_price + (range_amount * 1.2)
+        elif total_bias < -0.1:  # Bearish bias
+            price_low = stock_data.current_price - (range_amount * 1.2)
+            price_high = stock_data.current_price + (range_amount * 0.3)
+        else:  # Neutral
+            price_low = stock_data.current_price - range_amount
+            price_high = stock_data.current_price + range_amount
+            
+        return (round(price_low, 2), round(price_high, 2))
+
     def predict_price_movement(self, stock_data: StockData) -> Prediction:
         """Advanced prediction using ensemble models and risk management"""
         try:
@@ -562,6 +624,9 @@ class StockPredictor:
                 stock_data, predicted_change, signal
             )
             
+            # Calculate 30-minute price range prediction
+            price_range_30m = self.calculate_30min_price_range(stock_data)
+            
             prediction = Prediction(
                 direction=direction,
                 confidence=confidence,
@@ -569,7 +634,8 @@ class StockPredictor:
                 price_target=price_target,
                 stop_loss=stop_loss,
                 take_profit=take_profit,
-                risk_reward_ratio=risk_reward
+                risk_reward_ratio=risk_reward,
+                price_range_30m=price_range_30m
             )
             
             # Track prediction for accuracy calculation
@@ -660,6 +726,25 @@ class StockPredictor:
             target_change = ((prediction.price_target - stock_data.current_price) / stock_data.current_price) * 100
             profit_cents = abs(prediction.price_target - stock_data.current_price) * 100
             print(f"   Price Target:      ${prediction.price_target:.2f} ({target_change:+.1f}%, ~{profit_cents:.0f}¢ profit)")
+            
+        # 30-minute price range prediction
+        if prediction.price_range_30m:
+            low, high = prediction.price_range_30m
+            range_size = high - low
+            profit_potential = max(abs(high - stock_data.current_price), abs(stock_data.current_price - low)) * 100
+            print(f"🎯 30-MIN PRICE RANGE:")
+            print(f"   Expected Range:    ${low:.2f} - ${high:.2f}")
+            print(f"   Range Size:        ${range_size:.2f} (~{profit_potential:.0f}¢ max profit)")
+            
+            # Direction bias within range
+            current_position = (stock_data.current_price - low) / (high - low) * 100 if range_size > 0 else 50
+            if current_position < 30:
+                bias = "🟢 Near bottom (bullish)"
+            elif current_position > 70:
+                bias = "🔴 Near top (bearish)"
+            else:
+                bias = "🟡 Mid-range (neutral)"
+            print(f"   Current Position:  {current_position:.0f}% in range ({bias})")
             
         # Risk Management
         if prediction.stop_loss and prediction.take_profit:
