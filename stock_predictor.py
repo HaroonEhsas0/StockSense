@@ -95,8 +95,9 @@ class StockPredictor:
             
             # Get historical data for indicators
             hist_data = ticker.history(period="60d", interval="1d")
-            sma_20 = self._calculate_sma(hist_data['Close'], 20)
-            rsi_14 = self._calculate_rsi(hist_data['Close'], 14)
+            close_prices = hist_data['Close'] if not hist_data.empty else pd.Series([current_price])
+            sma_20 = self._calculate_sma(close_prices, 20)
+            rsi_14 = self._calculate_rsi(close_prices, 14)
             
             return StockData(
                 symbol=self.symbol,
@@ -208,7 +209,7 @@ class StockPredictor:
             
             rs = gain / loss
             rsi = 100 - (100 / (1 + rs))
-            return float(rsi.iloc[-1])
+            return float(rsi.iloc[-1]) if hasattr(rsi.iloc[-1], '__float__') else float(rsi.tail(1).values[0])
         except:
             return 50.0
             
@@ -312,15 +313,26 @@ class StockPredictor:
                 price_target = stock_data.current_price * (1 + predicted_change / 100)
                 
             else:
-                # Fallback to technical analysis only
-                if sma_trend == "UP" and stock_data.rsi_14 < 70:
+                # Enhanced technical analysis with momentum
+                momentum_score = (stock_data.price_change_15m + stock_data.price_change_30m + stock_data.price_change_1h) / 3
+                
+                # Consider both trend and momentum
+                if sma_trend == "UP" and stock_data.rsi_14 < 70 and momentum_score > -0.2:
                     direction = "UP"
                     signal = "BUY"
-                    confidence = 60.0
-                elif sma_trend == "DOWN" and stock_data.rsi_14 > 30:
+                    confidence = min(60.0 + abs(momentum_score) * 10, 85.0)
+                elif sma_trend == "DOWN" and stock_data.rsi_14 > 30 and momentum_score < 0.2:
                     direction = "DOWN"
                     signal = "SELL"
-                    confidence = 60.0
+                    confidence = min(60.0 + abs(momentum_score) * 10, 85.0)
+                elif momentum_score < -0.5:  # Strong negative momentum
+                    direction = "DOWN"
+                    signal = "SELL"
+                    confidence = 65.0
+                elif momentum_score > 0.5:   # Strong positive momentum
+                    direction = "UP"
+                    signal = "BUY"
+                    confidence = 65.0
                 else:
                     direction = "STABLE"
                     signal = "WAIT"
