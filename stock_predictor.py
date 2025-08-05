@@ -97,37 +97,41 @@ class StockPredictor:
         try:
             ticker = yf.Ticker(self.symbol)
             
-            # Get current data
-            info = ticker.info
-            hist = ticker.history(period="1d", interval="1m")
+            # Get most recent 1-minute data for real-time prices
+            hist_1m = ticker.history(period="1d", interval="1m")
+            # Get daily data for previous close
+            hist_daily = ticker.history(period="2d", interval="1d")
             
-            if hist.empty:
-                raise Exception("No data returned from Yahoo Finance")
+            if hist_1m.empty:
+                raise Exception("No minute data returned from Yahoo Finance")
                 
-            current_price = hist['Close'].iloc[-1]
-            previous_close = info.get('previousClose', hist['Close'].iloc[0])
-            day_high = hist['High'].max()
-            day_low = hist['Low'].min()
-            volume = hist['Volume'].sum()
+            # Use latest 1-minute data for current price
+            current_price = float(hist_1m['Close'].iloc[-1])
+            previous_close = float(hist_daily['Close'].iloc[-2]) if len(hist_daily) > 1 else float(hist_1m['Close'].iloc[0])
             
-            # Calculate intraday changes
-            price_change_15m = self._calculate_price_change(hist, 15)
-            price_change_30m = self._calculate_price_change(hist, 30)
-            price_change_1h = self._calculate_price_change(hist, 60)
+            # Today's high/low from minute data
+            day_high = float(hist_1m['High'].max())
+            day_low = float(hist_1m['Low'].min())
+            volume = int(hist_1m['Volume'].sum())
             
-            # Get historical data for indicators
-            hist_data = ticker.history(period="60d", interval="1d")
-            close_prices = hist_data['Close'] if not hist_data.empty else pd.Series([current_price])
+            # Calculate intraday changes from minute data
+            price_change_15m = self._calculate_price_change(hist_1m, 15)
+            price_change_30m = self._calculate_price_change(hist_1m, 30)
+            price_change_1h = self._calculate_price_change(hist_1m, 60)
+            
+            # Get historical data for indicators (daily for SMA/RSI)
+            hist_daily_long = ticker.history(period="60d", interval="1d")
+            close_prices = hist_daily_long['Close'] if not hist_daily_long.empty else pd.Series([current_price])
             sma_20 = self._calculate_sma(close_prices, 20)
             rsi_14 = self._calculate_rsi(close_prices, 14)
             
             return StockData(
                 symbol=self.symbol,
-                current_price=float(current_price),
-                previous_close=float(previous_close),
-                day_high=float(day_high),
-                day_low=float(day_low),
-                volume=int(volume),
+                current_price=current_price,
+                previous_close=previous_close,
+                day_high=day_high,
+                day_low=day_low,
+                volume=volume,
                 price_change_15m=price_change_15m,
                 price_change_30m=price_change_30m,
                 price_change_1h=price_change_1h,
@@ -488,25 +492,31 @@ class StockPredictor:
                 price_target = stock_data.current_price * (1 + predicted_change / 100)
                 
             else:
-                # Enhanced technical analysis
-                strong_momentum = abs(momentum_score) > 0.5
+                # Enhanced technical analysis with lower thresholds for more active signals
+                strong_momentum = abs(momentum_score) > 0.3
+                price_vs_sma = (stock_data.current_price - stock_data.sma_20) / stock_data.sma_20 * 100
                 
-                if sma_trend == "UP" and stock_data.rsi_14 < 65 and momentum_score > -0.2:
+                # More sensitive prediction logic for 30-40 cent movements
+                if momentum_score > 0.3 and price_vs_sma > 1.0:  # Strong bullish
                     direction = "UP"
-                    signal = "BUY" if not (stock_data.rsi_14 > 70) else "WAIT"
-                    confidence = min(65.0 + abs(momentum_score) * 10, 85.0)
-                elif sma_trend == "DOWN" and stock_data.rsi_14 > 35 and momentum_score < 0.2:
+                    signal = "BUY" if stock_data.rsi_14 < 75 else "WAIT"
+                    confidence = min(70.0 + abs(momentum_score) * 15, 90.0)
+                elif momentum_score < -0.3 and price_vs_sma > 1.0:  # Bearish with high price
                     direction = "DOWN"
-                    signal = "SELL" if not (stock_data.rsi_14 < 30) else "WAIT"
-                    confidence = min(65.0 + abs(momentum_score) * 10, 85.0)
-                elif momentum_score < -0.7:  # Strong bearish momentum
-                    direction = "DOWN"
-                    signal = "SELL"
-                    confidence = 75.0
-                elif momentum_score > 0.7:   # Strong bullish momentum
+                    signal = "SELL" if stock_data.rsi_14 > 25 else "WAIT"
+                    confidence = min(70.0 + abs(momentum_score) * 15, 90.0)
+                elif momentum_score > 0.15:  # Moderate bullish momentum
                     direction = "UP"
-                    signal = "BUY"
-                    confidence = 75.0
+                    signal = "BUY" if stock_data.rsi_14 < 70 and price_vs_sma > 0 else "WAIT"
+                    confidence = min(60.0 + abs(momentum_score) * 20, 80.0)
+                elif momentum_score < -0.15:  # Moderate bearish momentum
+                    direction = "DOWN"
+                    signal = "SELL" if stock_data.rsi_14 > 30 and price_vs_sma > 0 else "WAIT"
+                    confidence = min(60.0 + abs(momentum_score) * 20, 80.0)
+                elif abs(stock_data.price_change_15m) > 0.2:  # Recent significant movement
+                    direction = "UP" if stock_data.price_change_15m > 0 else "DOWN"
+                    signal = "BUY" if direction == "UP" and stock_data.rsi_14 < 65 else "SELL" if direction == "DOWN" and stock_data.rsi_14 > 35 else "WAIT"
+                    confidence = min(55.0 + abs(stock_data.price_change_15m) * 10, 75.0)
                 else:
                     direction = "STABLE"
                     signal = "WAIT"
@@ -591,6 +601,10 @@ class StockPredictor:
         momentum = (stock_data.price_change_15m + stock_data.price_change_30m + stock_data.price_change_1h) / 3
         momentum_status = "🚀 Strong Up" if momentum > 0.5 else "📉 Strong Down" if momentum < -0.5 else "➡️ Neutral"
         print(f"   Momentum Score:    {momentum:+.2f}% ({momentum_status})")
+        
+        # Price vs SMA analysis
+        price_vs_sma = (stock_data.current_price - stock_data.sma_20) / stock_data.sma_20 * 100
+        print(f"   Price vs SMA-20:   {price_vs_sma:+.1f}% ({price_vs_sma > 0 and '🟢 Above' or '🔴 Below'})")
         
         # Prediction Section
         direction_emoji = {"UP": "🚀", "DOWN": "📉", "STABLE": "➡️"}
