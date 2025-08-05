@@ -1,0 +1,37 @@
+modules = ["python-3.11"]
+
+[nix]
+channel = "stable-25_05"
+packages = ["glibcLocales"]
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Stock Predictor"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "stock_predictor_test"
+
+[[workflows.workflow]]
+name = "Stock Predictor"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pip install yfinance scikit-learn pandas numpy requests && python stock_predictor.py"
+
+[[workflows.workflow]]
+name = "stock_predictor_test"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pip install yfinance scikit-learn pandas numpy requests && python stock_predictor.py"
