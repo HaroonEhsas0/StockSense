@@ -61,9 +61,9 @@ class Prediction:
 class StockPredictor:
     """Main class for AMD stock prediction system"""
     
-    def __init__(self, symbol: str = "AMD", refresh_interval: int = 1800):
+    def __init__(self, symbol: str = "AMD", refresh_interval: int = 60):
         self.symbol = symbol
-        self.refresh_interval = refresh_interval  # seconds (default 30 minutes)
+        self.refresh_interval = refresh_interval  # seconds (default 1 minute)
         self.running = True
         self.eodhd_api_key = os.getenv("EODHD_API_KEY", "demo")
         self.historical_data = []
@@ -630,7 +630,10 @@ class StockPredictor:
         if len(self.prediction_history) > 5:
             print(f"   Prediction History: {len(self.prediction_history)} signals tracked")
         
-        print(f"\n🔄 Next update in {self.refresh_interval//60} minutes...")
+        if self.refresh_interval >= 60:
+            print(f"\n🔄 Next update in {self.refresh_interval//60} minutes...")
+        else:
+            print(f"\n🔄 Next update in {self.refresh_interval} seconds...")
         print(f"📝 Historical data points: {len(self.historical_data)}")
         print("\n💡 Press Ctrl+C to stop")
         print("=" * 80)
@@ -638,7 +641,10 @@ class StockPredictor:
     def run(self):
         """Main execution loop"""
         print("🚀 Starting AMD Stock Prediction System...")
-        print(f"📡 Refresh interval: {self.refresh_interval//60} minutes")
+        if self.refresh_interval >= 60:
+            print(f"📡 Refresh interval: {self.refresh_interval//60} minutes")
+        else:
+            print(f"📡 Refresh interval: {self.refresh_interval} seconds")
         print("🔧 Loading initial data...\n")
         
         while self.running:
@@ -693,12 +699,15 @@ def main():
     """Main entry point"""
     # Configuration
     SYMBOL = "AMD"
-    REFRESH_INTERVAL = int(os.getenv("REFRESH_INTERVAL", "1800"))  # 30 minutes default
+    REFRESH_INTERVAL = int(os.getenv("REFRESH_INTERVAL", "60"))  # 1 minute default
     
     print("🎯 AMD Stock Prediction System")
     print("===============================")
     print(f"📈 Target Stock: {SYMBOL}")
-    print(f"⏰ Refresh Interval: {REFRESH_INTERVAL//60} minutes")
+    if REFRESH_INTERVAL >= 60:
+        print(f"⏰ Refresh Interval: {REFRESH_INTERVAL//60} minutes")
+    else:
+        print(f"⏰ Refresh Interval: {REFRESH_INTERVAL} seconds")
     
     # Check for API keys
     eodhd_key = os.getenv("EODHD_API_KEY", "demo")
