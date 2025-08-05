@@ -496,27 +496,51 @@ class StockPredictor:
                 strong_momentum = abs(momentum_score) > 0.3
                 price_vs_sma = (stock_data.current_price - stock_data.sma_20) / stock_data.sma_20 * 100
                 
-                # More sensitive prediction logic for 30-40 cent movements
-                if momentum_score > 0.3 and price_vs_sma > 1.0:  # Strong bullish
+                # Balanced prediction logic for both UP and DOWN movements (20+ cent profits)
+                recent_change = stock_data.price_change_15m
+                volume_surge = stock_data.volume > 45000000  # High volume indicator
+                
+                # Strong bullish signals
+                if momentum_score > 0.2 and recent_change > 0.1:
                     direction = "UP"
                     signal = "BUY" if stock_data.rsi_14 < 75 else "WAIT"
-                    confidence = min(70.0 + abs(momentum_score) * 15, 90.0)
-                elif momentum_score < -0.3 and price_vs_sma > 1.0:  # Bearish with high price
+                    confidence = min(65.0 + abs(momentum_score) * 20, 88.0)
+                    
+                # Strong bearish signals - be aggressive about selling opportunities
+                elif momentum_score < -0.2 and recent_change < -0.1:
                     direction = "DOWN"
                     signal = "SELL" if stock_data.rsi_14 > 25 else "WAIT"
-                    confidence = min(70.0 + abs(momentum_score) * 15, 90.0)
-                elif momentum_score > 0.15:  # Moderate bullish momentum
+                    confidence = min(65.0 + abs(momentum_score) * 20, 88.0)
+                    
+                # Moderate bullish with volume
+                elif momentum_score > 0.1 and (volume_surge or price_vs_sma > 8.0):
                     direction = "UP"
-                    signal = "BUY" if stock_data.rsi_14 < 70 and price_vs_sma > 0 else "WAIT"
-                    confidence = min(60.0 + abs(momentum_score) * 20, 80.0)
-                elif momentum_score < -0.15:  # Moderate bearish momentum
+                    signal = "BUY" if stock_data.rsi_14 < 70 else "WAIT"
+                    confidence = min(58.0 + abs(momentum_score) * 25, 80.0)
+                    
+                # Moderate bearish - catch pullbacks for selling
+                elif momentum_score < -0.1 and (recent_change < -0.05 or stock_data.rsi_14 > 65):
                     direction = "DOWN"
-                    signal = "SELL" if stock_data.rsi_14 > 30 and price_vs_sma > 0 else "WAIT"
-                    confidence = min(60.0 + abs(momentum_score) * 20, 80.0)
-                elif abs(stock_data.price_change_15m) > 0.2:  # Recent significant movement
-                    direction = "UP" if stock_data.price_change_15m > 0 else "DOWN"
-                    signal = "BUY" if direction == "UP" and stock_data.rsi_14 < 65 else "SELL" if direction == "DOWN" and stock_data.rsi_14 > 35 else "WAIT"
-                    confidence = min(55.0 + abs(stock_data.price_change_15m) * 10, 75.0)
+                    signal = "SELL" if stock_data.rsi_14 > 30 else "WAIT"
+                    confidence = min(58.0 + abs(momentum_score) * 25, 80.0)
+                    
+                # Quick reversals - catch immediate direction changes
+                elif abs(recent_change) > 0.15:
+                    direction = "UP" if recent_change > 0 else "DOWN"
+                    signal = "BUY" if direction == "UP" and stock_data.rsi_14 < 68 else "SELL" if direction == "DOWN" and stock_data.rsi_14 > 32 else "WAIT"
+                    confidence = min(52.0 + abs(recent_change) * 15, 75.0)
+                    
+                # RSI extreme conditions for contrarian plays
+                elif stock_data.rsi_14 > 72:  # Overbought - prepare for selling
+                    direction = "DOWN"
+                    signal = "SELL" if momentum_score < 0.05 else "WAIT"
+                    confidence = min(55.0 + (stock_data.rsi_14 - 70) * 3, 75.0)
+                    
+                elif stock_data.rsi_14 < 28:  # Oversold - prepare for buying  
+                    direction = "UP"
+                    signal = "BUY" if momentum_score > -0.05 else "WAIT"
+                    confidence = min(55.0 + (30 - stock_data.rsi_14) * 3, 75.0)
+                    
                 else:
                     direction = "STABLE"
                     signal = "WAIT"
@@ -606,6 +630,10 @@ class StockPredictor:
         price_vs_sma = (stock_data.current_price - stock_data.sma_20) / stock_data.sma_20 * 100
         print(f"   Price vs SMA-20:   {price_vs_sma:+.1f}% ({price_vs_sma > 0 and '🟢 Above' or '🔴 Below'})")
         
+        # Volume analysis for market activity
+        volume_status = "🔥 High" if stock_data.volume > 45000000 else "📊 Normal" if stock_data.volume > 30000000 else "📉 Low"
+        print(f"   Volume Activity:   {stock_data.volume:,} ({volume_status})")
+        
         # Prediction Section
         direction_emoji = {"UP": "🚀", "DOWN": "📉", "STABLE": "➡️"}
         signal_emoji = {"BUY": "🟢 BUY", "SELL": "🔴 SELL", "WAIT": "🟡 WAIT"}
@@ -617,7 +645,8 @@ class StockPredictor:
         
         if prediction.price_target:
             target_change = ((prediction.price_target - stock_data.current_price) / stock_data.current_price) * 100
-            print(f"   Price Target:      ${prediction.price_target:.2f} ({target_change:+.1f}%)")
+            profit_cents = abs(prediction.price_target - stock_data.current_price) * 100
+            print(f"   Price Target:      ${prediction.price_target:.2f} ({target_change:+.1f}%, ~{profit_cents:.0f}¢ profit)")
             
         # Risk Management
         if prediction.stop_loss and prediction.take_profit:
