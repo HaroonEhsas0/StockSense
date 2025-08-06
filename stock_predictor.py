@@ -1051,47 +1051,60 @@ class StockPredictor:
                     signal = "BUY" if stock_data.rsi_14 < 70 else "WAIT"
                     confidence = min(60.0 + abs(recent_change_15m) * 30, 85.0)
                     
-                # Momentum turning negative - prioritize SELL signals
-                elif momentum_score < -0.05:  # Any negative momentum = DOWN
+                # BALANCED momentum analysis - equal thresholds for both directions
+                elif momentum_score < -0.05:  # Negative momentum = DOWN (equal threshold)
                     direction = "DOWN"
-                    signal = "SELL" if stock_data.rsi_14 > 25 else "WAIT"
-                    confidence = min(55.0 + abs(momentum_score) * 40, 80.0)
+                    signal = "SELL" if stock_data.rsi_14 > 30 else "WAIT"
+                    confidence = min(60.0 + abs(momentum_score) * 30, 85.0)  # Equal confidence calculation
                     
-                # Strong bullish momentum only when clearly positive
-                elif momentum_score > 0.3 and recent_change_15m > 0:
+                # Positive momentum = UP (equal threshold and treatment)
+                elif momentum_score > 0.05 and recent_change_15m > -0.1:  # Equal conditions
                     direction = "UP"
-                    signal = "BUY" if stock_data.rsi_14 < 75 else "WAIT"
-                    confidence = min(65.0 + momentum_score * 20, 88.0)
+                    signal = "BUY" if stock_data.rsi_14 < 70 else "WAIT"
+                    confidence = min(60.0 + abs(momentum_score) * 30, 85.0)  # Equal confidence calculation
                     
-                # RSI overbought - strong SELL signal
-                elif stock_data.rsi_14 > 68:  # Lower threshold for overbought
+                # RSI extreme conditions - equal treatment for overbought and oversold
+                elif stock_data.rsi_14 > 70:  # Standard overbought threshold
                     direction = "DOWN"
                     signal = "SELL"
-                    confidence = min(55.0 + (stock_data.rsi_14 - 65) * 4, 78.0)
+                    confidence = min(60.0 + (stock_data.rsi_14 - 70) * 3, 80.0)
                     
-                # Price getting too high vs SMA - pullback expected
-                elif price_vs_sma > 9.0 and momentum_score < 0.2:
-                    direction = "DOWN"
-                    signal = "SELL" if stock_data.rsi_14 > 35 else "WAIT"
-                    confidence = min(58.0 + (price_vs_sma - 9) * 5, 75.0)
+                elif stock_data.rsi_14 < 30:  # Equal oversold condition
+                    direction = "UP"
+                    signal = "BUY"
+                    confidence = min(60.0 + (30 - stock_data.rsi_14) * 3, 80.0)  # Equal confidence
                     
-                # Weak momentum with high volume - indecision leading to drop
-                elif volume_surge and abs(momentum_score) < 0.1:
+                # Price vs SMA analysis - balanced treatment for both extremes
+                elif price_vs_sma > 2.0 and momentum_score < 0.2:  # More reasonable threshold
                     direction = "DOWN"
                     signal = "SELL" if stock_data.rsi_14 > 40 else "WAIT"
-                    confidence = 52.0
+                    confidence = min(58.0 + (price_vs_sma - 2) * 3, 75.0)
                     
-                # Only bullish when everything aligns
+                elif price_vs_sma < -2.0 and momentum_score > -0.2:  # Equal opposite condition
+                    direction = "UP"
+                    signal = "BUY" if stock_data.rsi_14 < 60 else "WAIT"
+                    confidence = min(58.0 + abs(price_vs_sma + 2) * 3, 75.0)  # Equal confidence
+                    
+                # Positive momentum and conditions aligned
                 elif momentum_score > 0.1 and recent_change_15m > 0 and stock_data.rsi_14 < 65:
                     direction = "UP"
                     signal = "BUY"
-                    confidence = min(55.0 + momentum_score * 25, 75.0)
+                    confidence = min(60.0 + momentum_score * 25, 80.0)  # Improved confidence
                     
                 else:
-                    # Default to DOWN bias for realistic trading
-                    direction = "DOWN" if stock_data.rsi_14 > 50 else "STABLE"
-                    signal = "SELL" if direction == "DOWN" and stock_data.rsi_14 > 35 else "WAIT"
-                    confidence = 51.0 if direction == "DOWN" else 50.0
+                    # BALANCED default - no directional bias
+                    if stock_data.rsi_14 > 55:  # Slightly overbought
+                        direction = "DOWN"
+                        signal = "WAIT"  # Conservative signal
+                        confidence = 52.0
+                    elif stock_data.rsi_14 < 45:  # Slightly oversold
+                        direction = "UP"
+                        signal = "WAIT"  # Conservative signal
+                        confidence = 52.0
+                    else:
+                        direction = "STABLE"
+                        signal = "WAIT"
+                        confidence = 50.0
                     
                 price_target = None
                 
@@ -1177,9 +1190,9 @@ class StockPredictor:
             rsi_status = "🟡 Neutral"
         print(f"   RSI Status:        {rsi_status}")
         
-        # Momentum analysis
+        # Momentum analysis - balanced thresholds
         momentum = (stock_data.price_change_15m + stock_data.price_change_30m + stock_data.price_change_1h) / 3
-        momentum_status = "🚀 Strong Up" if momentum > 0.3 else "📉 Strong Down" if momentum < -0.05 else "➡️ Neutral"
+        momentum_status = "🚀 Strong Up" if momentum > 0.3 else "📉 Strong Down" if momentum < -0.3 else "➡️ Neutral"
         print(f"   Momentum Score:    {momentum:+.2f}% ({momentum_status})")
         
         # Recent price action analysis

@@ -43,6 +43,14 @@ Preferred communication style: Simple, everyday language.
 - **Authentic Market Response**: System accurately reflects real market momentum in both directions
 - **Profit in Both Directions**: Correctly identifies uptrends for long positions AND downtrends for short positions
 
+### Prediction Balance Verification (2025-08-06)
+- **Eliminated Bearish Bias**: Removed default DOWN bias and asymmetric thresholds
+- **Equal Momentum Thresholds**: ±0.05 for both UP and DOWN momentum signals with identical confidence calculations
+- **Balanced RSI Treatment**: 70+ overbought = DOWN, 30- oversold = UP with equal confidence scoring
+- **Symmetric SMA Analysis**: ±2% price deviation from SMA triggers balanced UP/DOWN signals
+- **Neutral Default State**: No directional preference when market conditions are unclear
+- **Authentic Market Reflection**: System responds equally to bullish and bearish market conditions
+
 ## System Architecture
 
 ### Core Application Design
