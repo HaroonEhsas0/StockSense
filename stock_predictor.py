@@ -473,7 +473,7 @@ class StockPredictor:
             stop_loss = current_price * (1 + self.risk_tolerance)
             take_profit = current_price * (1 - self.risk_tolerance * self.reward_ratio)
         else:
-            return None, None, None
+            return 0.0, 0.0, 0.0
             
         risk_amount = abs(current_price - stop_loss)
         reward_amount = abs(take_profit - current_price)
@@ -510,7 +510,7 @@ class StockPredictor:
             hist_1m_extended = ticker.history(period="1d", interval="1m")
             
             if hist_5d.empty or hist_1m_extended.empty:
-                return None
+                return {}
                 
             # Prepare comprehensive features
             features = {
@@ -530,7 +530,7 @@ class StockPredictor:
             
         except Exception as e:
             print(f"Error collecting comprehensive data: {e}")
-            return None
+            return {}
 
     def predict_30min_stable_range(self, stock_data: StockData) -> tuple:
         """STABLE 30-minute prediction - creates ONE prediction that stays fixed for 30 minutes"""
@@ -580,7 +580,7 @@ class StockPredictor:
             # Create comprehensive features (6 features)
             min_len = min(len(prices), len(volumes), len(highs), len(lows))
             if min_len < 120:  # Need sufficient data for stability
-                return None
+                return (0.0, 0.0)
                 
             features = np.column_stack([
                 prices[-min_len:],
@@ -671,7 +671,7 @@ class StockPredictor:
                     
         except Exception as e:
             print(f"LSTM stable prediction error: {e}")
-            return None
+            return (0.0, 0.0)
     
     def _build_stable_lstm_model(self) -> Any:
         """Build a robust LSTM model optimized for stable 30-minute predictions"""
@@ -834,7 +834,7 @@ class StockPredictor:
             volumes = comprehensive_data['volumes']
             
             if len(prices) < 60:
-                return None
+                return {}
                 
             # Create features for 1-minute prediction (simplified for speed)
             recent_prices = prices[-60:]
@@ -910,7 +910,7 @@ class StockPredictor:
                     
         except Exception as e:
             print(f"LSTM 1-minute prediction failed: {e}")
-            return None
+            return {}
             
     def _build_1minute_model(self) -> Any:
         """Build lightweight LSTM model for 1-minute predictions"""
