@@ -67,12 +67,42 @@ class Prediction:
     prediction_30m_timestamp: Optional[datetime] = None  # When 30-min prediction was made
     prediction_30m_expires: Optional[datetime] = None    # When prediction expires
 
+@dataclass
+class NextDayPrediction:
+    """Data structure for next-day market open prediction"""
+    predicted_open_price: float
+    confidence: float
+    price_change_pct: float
+    direction: str  # UP, DOWN, STABLE
+    sentiment_score: float  # -1 to +1
+    overnight_factors: Dict[str, float]
+    futures_correlation: float
+    pre_market_trend: str
+    risk_assessment: str  # LOW, MEDIUM, HIGH
+    target_range: Tuple[float, float]  # (low, high) expected range
+    created_at: datetime
+
 class StockPredictor:
     """Main class for AMD stock prediction system"""
     
     def __init__(self, symbol: str = "AMD", refresh_interval: int = 60):
         self.symbol = symbol
         self.refresh_interval = refresh_interval  # seconds (default 1 minute)
+        
+        # Next-day prediction system
+        self.next_day_model = None
+        self.sentiment_cache = {}
+        self.overnight_data_cache = {}
+        self.last_next_day_prediction = None
+        self.next_day_prediction_time = None
+        
+        # API configurations (will be set from environment variables)
+        self.eodhd_api_key = os.getenv('EODHD_API_KEY', '')
+        self.polygon_api_key = os.getenv('POLYGON_API_KEY', '')
+        self.alpha_vantage_key = os.getenv('ALPHA_VANTAGE_API_KEY', '')
+        
+        # Futures correlation data for AMD (semiconductor sector)
+        self.semiconductor_futures = ['NQ', 'QQQ']  # NASDAQ futures correlation
         self.running = True
         self.eodhd_api_key = os.getenv("EODHD_API_KEY")
         self.historical_data = []
@@ -1317,6 +1347,384 @@ class StockPredictor:
         print("\n💡 Press Ctrl+C to stop")
         print("=" * 80)
         
+        # Show next-day prediction if available
+        self.display_next_day_prediction()
+
+    def get_market_sentiment(self) -> float:
+        """Get market sentiment score from multiple sources (-1 to +1)"""
+        try:
+            sentiment_scores = []
+            
+            # Alpha Vantage News Sentiment (if API key available)
+            if self.alpha_vantage_key:
+                av_sentiment = self._get_alpha_vantage_sentiment()
+                if av_sentiment is not None:
+                    sentiment_scores.append(av_sentiment)
+            
+            # EODHD News Sentiment (if API key available)
+            if self.eodhd_api_key:
+                eodhd_sentiment = self._get_eodhd_sentiment()
+                if eodhd_sentiment is not None:
+                    sentiment_scores.append(eodhd_sentiment)
+            
+            # Fallback: Technical sentiment based on price action
+            if not sentiment_scores:
+                technical_sentiment = self._calculate_technical_sentiment()
+                sentiment_scores.append(technical_sentiment)
+            
+            # Return average sentiment
+            return sum(sentiment_scores) / len(sentiment_scores) if sentiment_scores else 0.0
+            
+        except Exception as e:
+            print(f"⚠️ Sentiment analysis error: {e}")
+            return 0.0
+
+    def _get_alpha_vantage_sentiment(self) -> Optional[float]:
+        """Get sentiment from Alpha Vantage News API"""
+        try:
+            url = f"https://www.alphavantage.co/query"
+            params = {
+                'function': 'NEWS_SENTIMENT',
+                'tickers': self.symbol,
+                'apikey': self.alpha_vantage_key,
+                'limit': 20
+            }
+            
+            response = requests.get(url, params=params, timeout=10)
+            data = response.json()
+            
+            if 'feed' in data:
+                sentiments = []
+                for article in data['feed'][:10]:  # Use recent 10 articles
+                    for ticker_sentiment in article.get('ticker_sentiment', []):
+                        if ticker_sentiment.get('ticker') == self.symbol:
+                            sentiment_score = float(ticker_sentiment.get('ticker_sentiment_score', 0))
+                            sentiments.append(sentiment_score)
+                
+                return sum(sentiments) / len(sentiments) if sentiments else None
+            
+        except Exception as e:
+            print(f"Alpha Vantage sentiment error: {e}")
+        
+        return None
+
+    def _get_eodhd_sentiment(self) -> Optional[float]:
+        """Get sentiment from EODHD News API"""
+        try:
+            url = f"https://eodhd.com/api/news"
+            params = {
+                'api_token': self.eodhd_api_key,
+                's': self.symbol,
+                'limit': 20,
+                'fmt': 'json'
+            }
+            
+            response = requests.get(url, params=params, timeout=10)
+            data = response.json()
+            
+            if data and isinstance(data, list):
+                # Simple sentiment analysis based on title keywords
+                sentiment_scores = []
+                positive_words = ['surge', 'bullish', 'gains', 'beats', 'strong', 'upgrade', 'growth', 'positive']
+                negative_words = ['plunge', 'bearish', 'falls', 'misses', 'weak', 'downgrade', 'decline', 'negative']
+                
+                for article in data[:10]:
+                    title = article.get('title', '').lower()
+                    content = article.get('content', '')[:200].lower()  # First 200 chars
+                    text = f"{title} {content}"
+                    
+                    positive_count = sum(1 for word in positive_words if word in text)
+                    negative_count = sum(1 for word in negative_words if word in text)
+                    
+                    if positive_count > 0 or negative_count > 0:
+                        sentiment = (positive_count - negative_count) / (positive_count + negative_count + 1)
+                        sentiment_scores.append(sentiment)
+                
+                return sum(sentiment_scores) / len(sentiment_scores) if sentiment_scores else None
+                
+        except Exception as e:
+            print(f"EODHD sentiment error: {e}")
+        
+        return None
+
+    def _calculate_technical_sentiment(self) -> float:
+        """Calculate technical sentiment based on recent price action"""
+        if len(self.historical_data) < 5:
+            return 0.0
+            
+        recent_data = self.historical_data[-5:]
+        
+        # Price momentum sentiment
+        price_changes = []
+        for i in range(1, len(recent_data)):
+            change = (recent_data[i].current_price - recent_data[i-1].current_price) / recent_data[i-1].current_price
+            price_changes.append(change)
+        
+        avg_momentum = sum(price_changes) / len(price_changes)
+        
+        # RSI sentiment
+        latest_rsi = recent_data[-1].rsi_14
+        rsi_sentiment = 0.0
+        if latest_rsi > 70:
+            rsi_sentiment = -0.3  # Overbought = negative sentiment
+        elif latest_rsi < 30:
+            rsi_sentiment = 0.3   # Oversold = positive sentiment
+        
+        # Volume sentiment
+        latest_volume = recent_data[-1].volume
+        avg_volume = sum(d.volume for d in recent_data) / len(recent_data)
+        volume_sentiment = min((latest_volume - avg_volume) / avg_volume, 0.5) if avg_volume > 0 else 0
+        
+        # Combine technical indicators
+        technical_sentiment = (avg_momentum * 10) + rsi_sentiment + (volume_sentiment * 0.2)
+        return max(-1.0, min(1.0, technical_sentiment))
+
+    def get_overnight_futures_data(self) -> Dict[str, float]:
+        """Get overnight futures data that correlates with AMD"""
+        try:
+            overnight_factors = {}
+            
+            # NASDAQ 100 futures (AMD is tech stock)
+            nq_data = self._get_yahoo_futures_data('NQ=F')
+            if nq_data:
+                overnight_factors['nasdaq_futures'] = nq_data
+            
+            # SOX (Semiconductor index) - direct correlation
+            sox_data = self._get_yahoo_futures_data('SOXX')
+            if sox_data:
+                overnight_factors['semiconductor_etf'] = sox_data
+            
+            # VIX for market volatility
+            vix_data = self._get_yahoo_futures_data('^VIX')
+            if vix_data:
+                overnight_factors['volatility_index'] = vix_data
+            
+            return overnight_factors
+            
+        except Exception as e:
+            print(f"⚠️ Futures data error: {e}")
+            return {}
+
+    def _get_yahoo_futures_data(self, symbol: str) -> Optional[float]:
+        """Get overnight price change for futures/indices"""
+        try:
+            ticker = yf.Ticker(symbol)
+            data = ticker.history(period="2d", interval="1d")
+            
+            if len(data) >= 2:
+                yesterday_close = data.iloc[-2]['Close']
+                current_price = data.iloc[-1]['Close']
+                change_pct = (current_price - yesterday_close) / yesterday_close * 100
+                return float(change_pct)
+                
+        except Exception as e:
+            print(f"Futures data error for {symbol}: {e}")
+        
+        return None
+
+    def predict_next_day_open(self, current_stock_data: StockData) -> NextDayPrediction:
+        """Generate comprehensive next-day market open prediction"""
+        try:
+            print("🔮 Generating next-day open price prediction...")
+            
+            # Get sentiment analysis
+            sentiment_score = self.get_market_sentiment()
+            
+            # Get overnight factors
+            overnight_factors = self.get_overnight_futures_data()
+            
+            # Calculate futures correlation
+            futures_correlation = self._calculate_futures_correlation(overnight_factors)
+            
+            # Base prediction using multiple models
+            base_prediction = self._calculate_base_next_day_prediction(current_stock_data)
+            
+            # Apply sentiment adjustment
+            sentiment_adjustment = sentiment_score * 0.02  # ±2% max adjustment
+            
+            # Apply futures correlation
+            futures_adjustment = futures_correlation * 0.015  # ±1.5% max adjustment
+            
+            # Combine all factors
+            total_adjustment = sentiment_adjustment + futures_adjustment
+            predicted_price = current_stock_data.current_price * (1 + total_adjustment)
+            
+            # Calculate confidence based on data availability
+            confidence = self._calculate_next_day_confidence(sentiment_score, overnight_factors)
+            
+            # Determine direction and risk
+            price_change_pct = (predicted_price - current_stock_data.current_price) / current_stock_data.current_price * 100
+            direction = "UP" if price_change_pct > 0.1 else "DOWN" if price_change_pct < -0.1 else "STABLE"
+            
+            # Risk assessment
+            risk_level = "HIGH" if abs(price_change_pct) > 3 else "MEDIUM" if abs(price_change_pct) > 1 else "LOW"
+            
+            # Target range (±1% around prediction)
+            range_size = predicted_price * 0.01
+            target_range = (predicted_price - range_size, predicted_price + range_size)
+            
+            # Pre-market trend assessment
+            pre_market_trend = self._assess_pre_market_trend(overnight_factors)
+            
+            prediction = NextDayPrediction(
+                predicted_open_price=round(predicted_price, 2),
+                confidence=round(confidence, 1),
+                price_change_pct=round(price_change_pct, 2),
+                direction=direction,
+                sentiment_score=round(sentiment_score, 3),
+                overnight_factors=overnight_factors,
+                futures_correlation=round(futures_correlation, 3),
+                pre_market_trend=pre_market_trend,
+                risk_assessment=risk_level,
+                target_range=(round(target_range[0], 2), round(target_range[1], 2)),
+                created_at=datetime.now()
+            )
+            
+            # Cache the prediction
+            self.last_next_day_prediction = prediction
+            self.next_day_prediction_time = datetime.now()
+            
+            return prediction
+            
+        except Exception as e:
+            print(f"❌ Next-day prediction error: {e}")
+            # Return a basic prediction if there's an error
+            return NextDayPrediction(
+                predicted_open_price=current_stock_data.current_price,
+                confidence=50.0,
+                price_change_pct=0.0,
+                direction="STABLE",
+                sentiment_score=0.0,
+                overnight_factors={},
+                futures_correlation=0.0,
+                pre_market_trend="NEUTRAL",
+                risk_assessment="MEDIUM",
+                target_range=(current_stock_data.current_price * 0.99, current_stock_data.current_price * 1.01),
+                created_at=datetime.now()
+            )
+
+    def _calculate_base_next_day_prediction(self, stock_data: StockData) -> float:
+        """Calculate base next-day prediction using historical patterns"""
+        if len(self.historical_data) < 10:
+            return 0.0  # Not enough data
+        
+        # Analyze historical overnight gaps
+        overnight_gaps = []
+        daily_closes = []
+        
+        for i in range(len(self.historical_data) - 1):
+            current_close = self.historical_data[i].current_price
+            next_open = self.historical_data[i + 1].current_price  # Approximation
+            gap = (next_open - current_close) / current_close
+            overnight_gaps.append(gap)
+            daily_closes.append(current_close)
+        
+        # Recent pattern analysis
+        recent_gaps = overnight_gaps[-5:] if len(overnight_gaps) >= 5 else overnight_gaps
+        avg_gap = sum(recent_gaps) / len(recent_gaps) if recent_gaps else 0
+        
+        # RSI influence on overnight gaps
+        rsi_factor = 0.0
+        if stock_data.rsi_14 > 70:
+            rsi_factor = -0.005  # Overbought tends to gap down
+        elif stock_data.rsi_14 < 30:
+            rsi_factor = 0.005   # Oversold tends to gap up
+        
+        # Volume influence
+        if len(self.historical_data) >= 5:
+            avg_volume = sum(d.volume for d in self.historical_data[-5:]) / 5
+            volume_factor = (stock_data.volume - avg_volume) / avg_volume * 0.001
+        else:
+            volume_factor = 0
+        
+        total_expected_change = avg_gap + rsi_factor + volume_factor
+        return total_expected_change
+
+    def _calculate_futures_correlation(self, overnight_factors: Dict[str, float]) -> float:
+        """Calculate correlation with futures for next-day prediction"""
+        if not overnight_factors:
+            return 0.0
+        
+        # Weight different factors
+        correlation = 0.0
+        
+        if 'nasdaq_futures' in overnight_factors:
+            correlation += overnight_factors['nasdaq_futures'] * 0.6  # 60% weight for NASDAQ
+        
+        if 'semiconductor_etf' in overnight_factors:
+            correlation += overnight_factors['semiconductor_etf'] * 0.8  # 80% weight for semiconductors
+        
+        if 'volatility_index' in overnight_factors:
+            correlation -= overnight_factors['volatility_index'] * 0.2  # Inverse correlation with VIX
+        
+        return correlation / 100  # Convert to decimal
+
+    def _calculate_next_day_confidence(self, sentiment_score: float, overnight_factors: Dict[str, float]) -> float:
+        """Calculate confidence level for next-day prediction"""
+        base_confidence = 60.0
+        
+        # More data sources = higher confidence
+        if sentiment_score != 0:
+            base_confidence += 10
+        
+        if overnight_factors:
+            base_confidence += len(overnight_factors) * 5
+        
+        # Strong sentiment = higher confidence
+        base_confidence += abs(sentiment_score) * 15
+        
+        # Historical data quality
+        if len(self.historical_data) >= 20:
+            base_confidence += 10
+        
+        return min(95.0, base_confidence)
+
+    def _assess_pre_market_trend(self, overnight_factors: Dict[str, float]) -> str:
+        """Assess pre-market trend based on overnight factors"""
+        if not overnight_factors:
+            return "NEUTRAL"
+        
+        total_change = sum(overnight_factors.values())
+        
+        if total_change > 1.5:
+            return "BULLISH"
+        elif total_change < -1.5:
+            return "BEARISH"
+        else:
+            return "NEUTRAL"
+
+    def display_next_day_prediction(self):
+        """Display next-day prediction if available and recent"""
+        if not self.last_next_day_prediction:
+            return
+        
+        # Only show if prediction is recent (within 4 hours)
+        if (datetime.now() - self.next_day_prediction_time).total_seconds() > 14400:
+            return
+        
+        pred = self.last_next_day_prediction
+        direction_emoji = "🚀" if pred.direction == "UP" else "📉" if pred.direction == "DOWN" else "➡️"
+        risk_emoji = "🔴" if pred.risk_assessment == "HIGH" else "🟡" if pred.risk_assessment == "MEDIUM" else "🟢"
+        
+        print(f"\n🔮 NEXT-DAY MARKET OPEN PREDICTION:")
+        print(f"   Predicted Price:   ${pred.predicted_open_price:.2f} ({pred.price_change_pct:+.2f}%)")
+        print(f"   Direction:         {direction_emoji} {pred.direction}")
+        print(f"   Confidence:        {pred.confidence:.1f}%")
+        print(f"   Target Range:      ${pred.target_range[0]:.2f} - ${pred.target_range[1]:.2f}")
+        print(f"   Risk Level:        {risk_emoji} {pred.risk_assessment}")
+        print(f"   Sentiment Score:   {pred.sentiment_score:+.3f} (-1 to +1)")
+        print(f"   Pre-Market Trend:  {pred.pre_market_trend}")
+        
+        if pred.overnight_factors:
+            print(f"   Overnight Factors:")
+            for factor, value in pred.overnight_factors.items():
+                factor_name = factor.replace('_', ' ').title()
+                print(f"     {factor_name}: {value:+.2f}%")
+        
+        prediction_age = datetime.now() - pred.created_at
+        hours_old = prediction_age.total_seconds() / 3600
+        print(f"   Created:           {hours_old:.1f} hours ago")
+
     def run(self):
         """Main execution loop"""
         print("🚀 Starting AMD Stock Prediction System...")
@@ -1357,6 +1765,21 @@ class StockPredictor:
                     
                 # Make prediction
                 prediction = self.predict_price_movement(stock_data)
+                
+                # Generate next-day prediction (once every 4 hours or on first run)
+                current_time = datetime.now()
+                should_predict_next_day = (
+                    not self.next_day_prediction_time or 
+                    (current_time - self.next_day_prediction_time).total_seconds() > 14400 or  # 4 hours
+                    current_time.hour >= 15  # After 3 PM
+                )
+                
+                if should_predict_next_day:
+                    try:
+                        next_day_pred = self.predict_next_day_open(stock_data)
+                        print(f"✅ Next-day prediction generated for tomorrow's open")
+                    except Exception as e:
+                        print(f"⚠️ Next-day prediction failed: {e}")
                 
                 # Display results
                 self.display_data(stock_data, prediction)

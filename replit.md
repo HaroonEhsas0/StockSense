@@ -35,6 +35,26 @@ Preferred communication style: Simple, everyday language.
 - **Enhanced LSTM models**: Separate models for 30-min stable and 1-min ahead predictions
 - **Smart caching**: Prevents prediction fluctuation during active trading windows
 
+### Next-Day Prediction API Configuration (Optional Enhancement)
+For maximum accuracy, users can configure API keys for enhanced features:
+
+#### Environment Variables Setup:
+```bash
+# Alpha Vantage (Free tier: 25 calls/day, Premium: $249/month)
+export ALPHA_VANTAGE_API_KEY="your_alpha_vantage_key"
+
+# EODHD APIs (Free tier: 20 calls/day, Pro: $79/month)
+export EODHD_API_KEY="your_eodhd_key"
+
+# Polygon.io (Free tier available, Premium features)
+export POLYGON_API_KEY="your_polygon_key"
+```
+
+#### Fallback Operation:
+- **System works without API keys** using advanced technical sentiment analysis
+- **Yahoo Finance provides base data** for futures correlation and overnight factors
+- **Technical indicators generate sentiment** when external APIs unavailable
+
 ### Balanced Prediction System - Final (2025-08-06)
 - **CONFIRMED 100% Real Data**: Using authentic Yahoo Finance API - live prices, volume, technical indicators
 - **Balanced Direction Predictions**: Equal thresholds (±0.05) for both UP and DOWN predictions 
@@ -58,6 +78,17 @@ Preferred communication style: Simple, everyday language.
 - **LSTM Balance**: Fixed LSTM prediction logic to have equal sensitivity for bullish and bearish movements
 - **Comprehensive Balance**: All prediction systems now treat UP and DOWN movements with identical algorithms and thresholds
 
+### Next-Day Open Price Prediction System (2025-08-06)
+- **Advanced Multi-Source Prediction**: Comprehensive system for accurate next-day market open price forecasting
+- **Real-Time Sentiment Analysis**: Integration with Alpha Vantage and EODHD APIs for news sentiment scoring
+- **Overnight Futures Correlation**: NASDAQ and semiconductor futures data correlation for AMD predictions
+- **Technical Sentiment Fallback**: Advanced technical analysis when external APIs unavailable
+- **Pre-Market Trend Analysis**: Assessment of overnight market factors affecting next-day opening
+- **Confidence Scoring**: Multi-factor confidence calculation based on data quality and availability
+- **Risk Assessment**: Automatic risk level classification (LOW/MEDIUM/HIGH) for next-day predictions
+- **Target Range Prediction**: Expected price range with ±1% accuracy bands around predictions
+- **Automated Generation**: Predictions generated after 3 PM or every 4 hours with smart caching
+
 ## System Architecture
 
 ### Core Application Design
@@ -80,14 +111,17 @@ Preferred communication style: Simple, everyday language.
 - **Data Preprocessing**: Separate MinMaxScaler instances for different prediction models
 
 ### Trading System Components
-- **Dual-Horizon Prediction System**: 
+- **Triple-Horizon Prediction System**: 
+  - **Next-Day Open**: Comprehensive next-day market open price predictions using sentiment + futures correlation
   - **30-Minute Stable**: Locked predictions for strategic position planning
   - **1-Minute Ahead**: Immediate price movement for tactical entry/exit timing
+- **Advanced Sentiment Integration**: Multi-source sentiment analysis from news APIs and technical indicators
+- **Overnight Futures Correlation**: NASDAQ and semiconductor ETF correlation for next-day accuracy
 - **Risk Management**: Automated stop-loss and take-profit calculations with 2:1 risk-reward ratios
 - **Multiple Timeframe Analysis**: Enhanced momentum scoring across 15-minute, 30-minute, and 1-hour intervals
 - **Technical Indicators**: SMA-20, RSI-14 with intelligent overbought/oversold detection
 - **Smart Signal Generation**: Professional trading signals with confidence scores and precise price targets
-- **Prediction Accuracy**: Separate tracking for stable vs. immediate predictions
+- **Multi-Factor Confidence**: Separate tracking for immediate, stable, and next-day predictions
 
 ### Error Handling and Reliability
 - **Graceful Degradation**: Handles missing dependencies with clear installation instructions
