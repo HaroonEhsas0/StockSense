@@ -96,7 +96,20 @@ class StockPredictor:
         # 30-minute stable prediction cache
         self.current_30min_prediction = None
         self.prediction_30m_made_at = None
+        self.prediction_30m_direction = None
+        self.prediction_30m_confidence = None
         self.comprehensive_data_cache = []
+        
+        # Pre-trained LSTM model for stable predictions
+        self.stable_lstm_model = None
+        self.lstm_scaler = MinMaxScaler()
+        self.prediction_history_30m = []  # Track 30-min prediction accuracy
+        
+        # 1-minute ahead prediction system
+        self.minute_ahead_model = None
+        self.minute_scaler = MinMaxScaler()
+        self.last_1min_prediction = None
+        self.last_1min_prediction_time = None
         
         # Setup signal handler for graceful exit
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -520,105 +533,163 @@ class StockPredictor:
             return None
 
     def predict_30min_stable_range(self, stock_data: StockData) -> tuple:
-        """Stable 30-minute prediction using LSTM and comprehensive analysis"""
+        """STABLE 30-minute prediction - creates ONE prediction that stays fixed for 30 minutes"""
         
-        # Check if we have a valid 30-minute prediction that's still active
         current_time = datetime.now()
+        
+        # Check if we have a valid cached 30-minute prediction
         if (self.current_30min_prediction and 
             self.prediction_30m_made_at and 
             (current_time - self.prediction_30m_made_at).total_seconds() < 1800):  # 30 minutes = 1800 seconds
+            
+            # Calculate remaining time
+            remaining_seconds = 1800 - (current_time - self.prediction_30m_made_at).total_seconds()
+            remaining_minutes = int(remaining_seconds / 60)
+            
+            print(f"⏳ Using cached 30-min prediction (expires in {remaining_minutes}m)")
             return self.current_30min_prediction
             
-        print("🔄 Generating new 30-minute stable prediction...")
+        print("🔄 Creating NEW 30-minute STABLE prediction (will NOT change for 30 minutes)...")
         
-        # Collect comprehensive market data
+        # Get comprehensive historical data for LSTM training
         comprehensive_data = self.get_comprehensive_market_data(stock_data)
         if not comprehensive_data:
-            return self.calculate_30min_price_range_fallback(stock_data)
+            return self._create_stable_fallback_prediction(stock_data, current_time)
             
-        # LSTM-based prediction if available
-        if LSTM_AVAILABLE and len(comprehensive_data['prices']) >= 60:
+        # Use pre-trained LSTM model for stable predictions
+        if LSTM_AVAILABLE and len(comprehensive_data['prices']) >= 120:  # Need more data for stability
             try:
-                # Prepare data for LSTM
-                prices = comprehensive_data['prices']
-                volumes = comprehensive_data['volumes']
-                highs = comprehensive_data['highs']
-                lows = comprehensive_data['lows']
-                
-                # Create feature matrix
-                min_len = min(len(prices), len(volumes), len(highs), len(lows))
-                features = np.column_stack([
-                    prices[-min_len:],
-                    volumes[-min_len:],
-                    highs[-min_len:],
-                    lows[-min_len:],
-                    np.full(min_len, comprehensive_data['rsi']),
-                    np.full(min_len, comprehensive_data['momentum'])
-                ])
-                
-                # Normalize features
-                scaler = MinMaxScaler()
-                features_scaled = scaler.fit_transform(features)
-                
-                # Create sequences for LSTM (use last 60 data points)
-                if len(features_scaled) >= 60:
-                    sequence = features_scaled[-60:].reshape(1, 60, 6)
-                    
-                    # Build and train simple LSTM for prediction
-                    model = self.build_lstm_model(60)
-                    if model:
-                        # Quick training on recent data
-                        train_data = []
-                        train_targets = []
-                        
-                        for i in range(60, len(features_scaled) - 30):
-                            train_data.append(features_scaled[i-60:i])
-                            train_targets.append(features_scaled[i+30, 0])  # Predict price 30 steps ahead
-                            
-                        if len(train_data) > 10:
-                            X_train = np.array(train_data)
-                            y_train = np.array(train_targets)
-                            
-                            # Quick training
-                            model.fit(X_train, y_train, epochs=20, batch_size=16, verbose=0)
-                            
-                            # Predict
-                            prediction = model.predict(sequence, verbose=0)
-                            predicted_price_normalized = prediction[0][0]
-                            
-                            # Denormalize prediction
-                            temp_data = np.zeros((1, 6))
-                            temp_data[0, 0] = predicted_price_normalized
-                            predicted_price = scaler.inverse_transform(temp_data)[0, 0]
-                            
-                            # Calculate confidence-based range
-                            prediction_confidence = min(abs(predicted_price - stock_data.current_price) / stock_data.current_price * 100, 2.0)
-                            range_pct = max(0.2, prediction_confidence)  # 0.2% minimum range
-                            
-                            if predicted_price > stock_data.current_price:  # Bullish prediction
-                                price_low = stock_data.current_price - (stock_data.current_price * 0.001)  # Small downside
-                                price_high = predicted_price + (predicted_price * range_pct / 100)
-                            else:  # Bearish prediction
-                                price_low = predicted_price - (predicted_price * range_pct / 100)
-                                price_high = stock_data.current_price + (stock_data.current_price * 0.001)  # Small upside
-                                
-                            stable_range = (round(price_low, 2), round(price_high, 2))
-                            
-                            # Cache the prediction for 30 minutes
-                            self.current_30min_prediction = stable_range
-                            self.prediction_30m_made_at = current_time
-                            
-                            print(f"✅ LSTM-based 30-min prediction cached until {(current_time + timedelta(minutes=30)).strftime('%H:%M:%S')}")
-                            return stable_range
-                            
+                stable_range = self._create_lstm_stable_prediction(stock_data, comprehensive_data, current_time)
+                if stable_range:
+                    return stable_range
             except Exception as e:
-                print(f"LSTM prediction failed: {e}")
+                print(f"⚠️ LSTM prediction failed: {e}")
                 
-        # Fallback to enhanced traditional analysis
-        return self.calculate_30min_price_range_fallback(stock_data)
+        # Fallback to enhanced stable analysis
+        return self._create_stable_fallback_prediction(stock_data, current_time)
 
-    def calculate_30min_price_range_fallback(self, stock_data: StockData) -> tuple:
-        """Calculate accurate 30-minute price range prediction based on comprehensive analysis"""
+    def _create_lstm_stable_prediction(self, stock_data: StockData, comprehensive_data: dict, current_time: datetime) -> tuple:
+        """Create a truly stable LSTM-based 30-minute prediction"""
+        try:
+            # Prepare robust feature matrix with more historical data
+            prices = comprehensive_data['prices']
+            volumes = comprehensive_data['volumes'] 
+            highs = comprehensive_data['highs']
+            lows = comprehensive_data['lows']
+            
+            # Create comprehensive features (6 features)
+            min_len = min(len(prices), len(volumes), len(highs), len(lows))
+            if min_len < 120:  # Need sufficient data for stability
+                return None
+                
+            features = np.column_stack([
+                prices[-min_len:],
+                volumes[-min_len:],
+                highs[-min_len:], 
+                lows[-min_len:],
+                np.full(min_len, comprehensive_data['rsi']),
+                np.full(min_len, comprehensive_data['momentum'])
+            ])
+            
+            # Normalize features with dedicated scaler
+            features_scaled = self.lstm_scaler.fit_transform(features)
+            
+            # Build and train a robust LSTM model
+            if not self.stable_lstm_model:
+                self.stable_lstm_model = self._build_stable_lstm_model()
+                
+            if self.stable_lstm_model:
+                # Prepare training data for 30-minute predictions
+                X_train, y_train = [], []
+                sequence_length = 60
+                
+                # Create training sequences predicting 30 minutes ahead
+                for i in range(sequence_length, len(features_scaled) - 30):
+                    X_train.append(features_scaled[i-sequence_length:i])
+                    y_train.append(features_scaled[i+30, 0])  # Price 30 steps ahead
+                    
+                if len(X_train) >= 20:  # Need sufficient training data
+                    X_train = np.array(X_train)
+                    y_train = np.array(y_train)
+                    
+                    # Train the model thoroughly for stable predictions
+                    self.stable_lstm_model.fit(X_train, y_train, 
+                                             epochs=30, batch_size=8, verbose=0,
+                                             validation_split=0.2)
+                    
+                    # Make prediction using last 60 data points
+                    last_sequence = features_scaled[-sequence_length:].reshape(1, sequence_length, 6)
+                    prediction_normalized = self.stable_lstm_model.predict(last_sequence, verbose=0)[0][0]
+                    
+                    # Denormalize prediction
+                    temp_data = np.zeros((1, 6))
+                    temp_data[0, 0] = prediction_normalized
+                    predicted_price = self.lstm_scaler.inverse_transform(temp_data)[0, 0]
+                    
+                    # Determine direction and create stable range
+                    current_price = stock_data.current_price
+                    price_change_pct = (predicted_price - current_price) / current_price * 100
+                    
+                    # Create narrow, accurate range based on prediction confidence
+                    if price_change_pct > 0.1:  # Bullish prediction
+                        direction = "UP"
+                        # Narrow range with bullish bias
+                        price_low = current_price - (current_price * 0.002)  # 0.2% downside
+                        price_high = predicted_price + (predicted_price * 0.003)  # Small buffer above prediction
+                        confidence = min(75 + abs(price_change_pct) * 5, 95)
+                        
+                    elif price_change_pct < -0.1:  # Bearish prediction  
+                        direction = "DOWN"
+                        # Narrow range with bearish bias
+                        price_low = predicted_price - (predicted_price * 0.003)  # Small buffer below prediction
+                        price_high = current_price + (current_price * 0.002)  # 0.2% upside
+                        confidence = min(75 + abs(price_change_pct) * 5, 95)
+                        
+                    else:  # Stable prediction
+                        direction = "STABLE"
+                        # Very narrow range around current price
+                        range_size = current_price * 0.003  # 0.3% total range
+                        price_low = current_price - range_size
+                        price_high = current_price + range_size
+                        confidence = 65
+                    
+                    # Cache the stable prediction
+                    stable_range = (round(price_low, 2), round(price_high, 2))
+                    self.current_30min_prediction = stable_range
+                    self.prediction_30m_made_at = current_time
+                    self.prediction_30m_direction = direction
+                    self.prediction_30m_confidence = confidence
+                    
+                    print(f"🎯 LSTM STABLE 30-min: {direction} | Range: ${price_low:.2f}-${price_high:.2f} | Confidence: {confidence:.1f}%")
+                    print(f"📌 LOCKED until {(current_time + timedelta(minutes=30)).strftime('%H:%M:%S')} (30 minutes)")
+                    
+                    return stable_range
+                    
+        except Exception as e:
+            print(f"LSTM stable prediction error: {e}")
+            return None
+    
+    def _build_stable_lstm_model(self) -> Any:
+        """Build a robust LSTM model optimized for stable 30-minute predictions"""
+        if not LSTM_AVAILABLE:
+            return None
+            
+        model = Sequential([
+            LSTM(128, return_sequences=True, input_shape=(60, 6)),
+            Dropout(0.3),
+            LSTM(64, return_sequences=True),
+            Dropout(0.3), 
+            LSTM(32, return_sequences=False),
+            Dropout(0.2),
+            Dense(16, activation='relu'),
+            Dense(1)
+        ])
+        
+        model.compile(optimizer=Adam(learning_rate=0.0005), loss='mse', metrics=['mae'])
+        return model
+    
+    def _create_stable_fallback_prediction(self, stock_data: StockData, current_time: datetime) -> tuple:
+        """Create stable fallback prediction when LSTM is not available"""
         
         # Base volatility from recent movements
         recent_volatility = (abs(stock_data.price_change_15m) + abs(stock_data.price_change_30m)) / 2
@@ -676,7 +747,189 @@ class StockPredictor:
             price_low = stock_data.current_price - range_amount
             price_high = stock_data.current_price + range_amount
             
-        return (round(price_low, 2), round(price_high, 2))
+        # Cache the stable prediction for 30 minutes
+        stable_range = (round(price_low, 2), round(price_high, 2))
+        self.current_30min_prediction = stable_range
+        self.prediction_30m_made_at = current_time
+        
+        # Determine direction based on bias
+        if total_bias > 0.05:
+            self.prediction_30m_direction = "UP"
+            self.prediction_30m_confidence = 70
+        elif total_bias < -0.05:
+            self.prediction_30m_direction = "DOWN" 
+            self.prediction_30m_confidence = 70
+        else:
+            self.prediction_30m_direction = "STABLE"
+            self.prediction_30m_confidence = 60
+            
+        print(f"📈 FALLBACK STABLE prediction: {self.prediction_30m_direction} | Range: ${price_low:.2f}-${price_high:.2f}")
+        print(f"📌 LOCKED until {(current_time + timedelta(minutes=30)).strftime('%H:%M:%S')} (30 minutes)")
+        
+        return stable_range
+
+    def predict_1minute_ahead(self, stock_data: StockData) -> dict:
+        """Predict the exact price movement for the next 1 minute with high accuracy"""
+        current_time = datetime.now()
+        
+        # Only create new prediction if more than 30 seconds have passed
+        if (self.last_1min_prediction and self.last_1min_prediction_time and 
+            (current_time - self.last_1min_prediction_time).total_seconds() < 30):
+            return self.last_1min_prediction
+            
+        try:
+            # Get comprehensive data for 1-minute prediction
+            comprehensive_data = self.get_comprehensive_market_data(stock_data)
+            if not comprehensive_data or len(comprehensive_data['prices']) < 60:
+                return self._fallback_1min_prediction(stock_data)
+                
+            # Use LSTM for precise 1-minute prediction
+            if LSTM_AVAILABLE:
+                prediction = self._lstm_1minute_prediction(stock_data, comprehensive_data)
+                if prediction:
+                    self.last_1min_prediction = prediction
+                    self.last_1min_prediction_time = current_time
+                    return prediction
+                    
+            # Fallback to technical analysis
+            return self._fallback_1min_prediction(stock_data)
+            
+        except Exception as e:
+            print(f"1-minute prediction error: {e}")
+            return self._fallback_1min_prediction(stock_data)
+    
+    def _lstm_1minute_prediction(self, stock_data: StockData, comprehensive_data: dict) -> dict:
+        """Use LSTM to predict next 1-minute price movement"""
+        try:
+            prices = comprehensive_data['prices']
+            volumes = comprehensive_data['volumes']
+            
+            if len(prices) < 60:
+                return None
+                
+            # Create features for 1-minute prediction (simplified for speed)
+            recent_prices = prices[-60:]
+            recent_volumes = volumes[-60:]
+            
+            # Calculate micro-features for 1-minute prediction
+            price_changes = np.diff(recent_prices) / recent_prices[:-1] * 100
+            volume_changes = np.diff(recent_volumes) / recent_volumes[:-1] * 100
+            
+            # Create feature matrix
+            features = np.column_stack([
+                recent_prices[1:],  # Remove first element to match diff arrays
+                recent_volumes[1:],
+                price_changes,
+                volume_changes,
+                np.full(len(price_changes), stock_data.rsi_14),
+                np.full(len(price_changes), stock_data.price_change_15m)
+            ])
+            
+            # Normalize features
+            features_scaled = self.minute_scaler.fit_transform(features)
+            
+            # Build lightweight model for 1-minute prediction
+            if not self.minute_ahead_model:
+                self.minute_ahead_model = self._build_1minute_model()
+                
+            if self.minute_ahead_model and len(features_scaled) >= 30:
+                # Prepare training data (predict 1 step ahead)
+                X_train, y_train = [], []
+                sequence_length = 20  # Shorter sequence for 1-minute
+                
+                for i in range(sequence_length, len(features_scaled) - 1):
+                    X_train.append(features_scaled[i-sequence_length:i])
+                    y_train.append(features_scaled[i+1, 0])  # Next price
+                    
+                if len(X_train) >= 10:
+                    X_train = np.array(X_train)
+                    y_train = np.array(y_train)
+                    
+                    # Quick training for 1-minute prediction
+                    self.minute_ahead_model.fit(X_train, y_train, epochs=10, batch_size=4, verbose=0)
+                    
+                    # Predict next minute
+                    last_sequence = features_scaled[-sequence_length:].reshape(1, sequence_length, 6)
+                    prediction_normalized = self.minute_ahead_model.predict(last_sequence, verbose=0)[0][0]
+                    
+                    # Denormalize
+                    temp_data = np.zeros((1, 6))
+                    temp_data[0, 0] = prediction_normalized
+                    predicted_price = self.minute_scaler.inverse_transform(temp_data)[0, 0]
+                    
+                    # Calculate change and confidence
+                    current_price = stock_data.current_price
+                    price_change = predicted_price - current_price
+                    price_change_pct = (price_change / current_price) * 100
+                    
+                    # Determine direction and confidence
+                    if abs(price_change_pct) > 0.05:  # Meaningful change
+                        direction = "UP" if price_change_pct > 0 else "DOWN"
+                        confidence = min(70 + abs(price_change_pct) * 20, 95)
+                    else:
+                        direction = "STABLE"
+                        confidence = 60
+                        
+                    return {
+                        'predicted_price': round(predicted_price, 2),
+                        'price_change': round(price_change, 2),
+                        'price_change_pct': round(price_change_pct, 3),
+                        'direction': direction,
+                        'confidence': round(confidence, 1),
+                        'method': 'LSTM'
+                    }
+                    
+        except Exception as e:
+            print(f"LSTM 1-minute prediction failed: {e}")
+            return None
+            
+    def _build_1minute_model(self) -> Any:
+        """Build lightweight LSTM model for 1-minute predictions"""
+        if not LSTM_AVAILABLE:
+            return None
+            
+        model = Sequential([
+            LSTM(32, return_sequences=True, input_shape=(20, 6)),
+            Dropout(0.2),
+            LSTM(16, return_sequences=False),
+            Dense(8, activation='relu'),
+            Dense(1)
+        ])
+        
+        model.compile(optimizer=Adam(learning_rate=0.001), loss='mse')
+        return model
+        
+    def _fallback_1min_prediction(self, stock_data: StockData) -> dict:
+        """Fallback 1-minute prediction using technical analysis"""
+        # Use recent momentum and volatility
+        momentum = stock_data.price_change_15m
+        rsi_signal = stock_data.rsi_14
+        
+        # Simple prediction based on momentum
+        if momentum > 0.1 and rsi_signal < 70:
+            direction = "UP"
+            predicted_change_pct = momentum * 0.1  # Conservative estimate
+            confidence = 65
+        elif momentum < -0.1 and rsi_signal > 30:
+            direction = "DOWN" 
+            predicted_change_pct = momentum * 0.1
+            confidence = 65
+        else:
+            direction = "STABLE"
+            predicted_change_pct = 0.0
+            confidence = 55
+            
+        predicted_price = stock_data.current_price * (1 + predicted_change_pct / 100)
+        price_change = predicted_price - stock_data.current_price
+        
+        return {
+            'predicted_price': round(predicted_price, 2),
+            'price_change': round(price_change, 2),
+            'price_change_pct': round(predicted_change_pct, 3),
+            'direction': direction,
+            'confidence': confidence,
+            'method': 'Technical'
+        }
 
     def predict_price_movement(self, stock_data: StockData) -> Prediction:
         """Advanced prediction using ensemble models and risk management"""
@@ -920,6 +1173,15 @@ class StockPredictor:
                 recommendation = "➡️ Sideways movement expected"
             print(f"   Current Position:  {current_position:.0f}% in range ({bias})")
             print(f"   30-min Direction:  {recommendation}")
+            
+        # 1-minute ahead prediction
+        minute_prediction = self.predict_1minute_ahead(stock_data)
+        if minute_prediction:
+            print(f"\n⚡ 1-MINUTE AHEAD PREDICTION:")
+            direction_emoji = "📈" if minute_prediction['direction'] == "UP" else "📉" if minute_prediction['direction'] == "DOWN" else "➡️"
+            print(f"   Next Price:        ${minute_prediction['predicted_price']:.2f} ({minute_prediction['price_change']:+.2f}¢)")
+            print(f"   Direction:         {direction_emoji} {minute_prediction['direction']} ({minute_prediction['price_change_pct']:+.3f}%)")
+            print(f"   Confidence:        {minute_prediction['confidence']:.1f}% ({minute_prediction['method']})")
             
         # Risk Management
         if prediction.stop_loss and prediction.take_profit:

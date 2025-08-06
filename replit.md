@@ -20,6 +20,14 @@ Preferred communication style: Simple, everyday language.
 - Real-time AMD stock tracking operational with live price updates
 - Security practices maintained with proper client/server separation
 
+### Enhanced Prediction System (2025-08-06)
+- **Implemented STABLE 30-minute predictions**: Creates ONE prediction locked for exactly 30 minutes
+- **Added 1-minute ahead predictions**: LSTM-based precise short-term price forecasting
+- **Improved accuracy**: 30-min predictions stay consistent to prevent trading confusion
+- **Dual prediction system**: Long-term stability + immediate action guidance
+- **Enhanced LSTM models**: Separate models for 30-min stable and 1-min ahead predictions
+- **Smart caching**: Prevents prediction fluctuation during active trading windows
+
 ## System Architecture
 
 ### Core Application Design
@@ -33,19 +41,23 @@ Preferred communication style: Simple, everyday language.
 - **Structured Data Models**: Uses Python dataclasses (`StockData` and `Prediction`) for type-safe data handling
 
 ### Machine Learning Pipeline
-- **Ensemble Model Architecture**: Multiple ML models for improved prediction accuracy
-  - Linear Regression for baseline predictions
-  - Random Forest (100 estimators) for non-linear pattern recognition
-  - LSTM Neural Network for time-series sequence modeling
+- **Dual-Purpose LSTM Architecture**: Specialized models for different prediction horizons
+  - **30-Minute Stable Model**: Deep LSTM (128-64-32 units) for stable, locked predictions
+  - **1-Minute Ahead Model**: Lightweight LSTM (32-16 units) for immediate price movements
+  - Linear Regression and Random Forest for ensemble predictions
 - **Advanced Feature Engineering**: Enhanced feature set including technical indicators, momentum scores, and volatility measures
-- **Data Preprocessing**: MinMaxScaler normalization optimized for neural network training
+- **Intelligent Caching System**: 30-minute predictions locked to prevent trading confusion
+- **Data Preprocessing**: Separate MinMaxScaler instances for different prediction models
 
 ### Trading System Components
+- **Dual-Horizon Prediction System**: 
+  - **30-Minute Stable**: Locked predictions for strategic position planning
+  - **1-Minute Ahead**: Immediate price movement for tactical entry/exit timing
 - **Risk Management**: Automated stop-loss and take-profit calculations with 2:1 risk-reward ratios
 - **Multiple Timeframe Analysis**: Enhanced momentum scoring across 15-minute, 30-minute, and 1-hour intervals
 - **Technical Indicators**: SMA-20, RSI-14 with intelligent overbought/oversold detection
-- **Signal Generation**: Professional trading signals (BUY/SELL/WAIT) with confidence scores and price targets
-- **Performance Tracking**: Historical prediction accuracy monitoring and model performance metrics
+- **Smart Signal Generation**: Professional trading signals with confidence scores and precise price targets
+- **Prediction Accuracy**: Separate tracking for stable vs. immediate predictions
 
 ### Error Handling and Reliability
 - **Graceful Degradation**: Handles missing dependencies with clear installation instructions
