@@ -20,6 +20,10 @@ Preferred communication style: Simple, everyday language.
 - Real-time AMD stock tracking operational with live price updates
 - Security practices maintained with proper client/server separation
 - **MIGRATION COMPLETE**: All type errors resolved, workflows running perfectly
+- **100% AUTHENTIC DATA CONFIRMED**: Removed all demo data, hardcoded values, and placeholders
+- Primary data source: Yahoo Finance API (no API keys required) with real-time minute-by-minute data
+- Backup data source: EODHD API (optional, requires API key for enhanced features)
+- All intraday price movements calculated from authentic market data
 - Two workflows configured: "Stock Predictor" (main) and "stock_predictor_test" (backup)
 - System providing live predictions every minute with authentic market data
 

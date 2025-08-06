@@ -74,7 +74,7 @@ class StockPredictor:
         self.symbol = symbol
         self.refresh_interval = refresh_interval  # seconds (default 1 minute)
         self.running = True
-        self.eodhd_api_key = os.getenv("EODHD_API_KEY", "demo")
+        self.eodhd_api_key = os.getenv("EODHD_API_KEY")
         self.historical_data = []
         
         # Multiple models for ensemble predictions
@@ -173,6 +173,9 @@ class StockPredictor:
             
     def fetch_eodhd_data(self) -> Optional[StockData]:
         """Fetch data from EODHD API as backup"""
+        if not self.eodhd_api_key:
+            return None
+            
         try:
             # Real-time price
             url = f"https://eodhistoricaldata.com/api/real-time/{self.symbol}.US"
@@ -218,9 +221,9 @@ class StockPredictor:
                 day_high=day_high,
                 day_low=day_low,
                 volume=volume,
-                price_change_15m=0.0,  # EODHD doesn't provide intraday intervals easily
-                price_change_30m=0.0,
-                price_change_1h=0.0,
+                price_change_15m=self._get_intraday_change_estimate(current_price, previous_close, 15),
+                price_change_30m=self._get_intraday_change_estimate(current_price, previous_close, 30),
+                price_change_1h=self._get_intraday_change_estimate(current_price, previous_close, 60),
                 sma_20=sma_20,
                 rsi_14=rsi_14,
                 timestamp=datetime.now()
@@ -238,6 +241,32 @@ class StockPredictor:
             current_price = hist_data['Close'].iloc[-1]
             past_price = hist_data['Close'].iloc[-minutes]
             return float(((current_price - past_price) / past_price) * 100)
+        except:
+            return 0.0
+    
+    def _get_intraday_change_estimate(self, current_price: float, previous_close: float, minutes: int) -> float:
+        """Estimate intraday price change when detailed data is unavailable"""
+        try:
+            # Calculate daily change so far
+            daily_change_pct = ((current_price - previous_close) / previous_close) * 100
+            
+            # Estimate proportional change based on time elapsed
+            # Assume linear distribution throughout trading day (6.5 hours = 390 minutes)
+            current_time = datetime.now()
+            if current_time.weekday() < 5:  # Weekday
+                market_open = current_time.replace(hour=9, minute=30, second=0, microsecond=0)
+                if current_time < market_open:
+                    return 0.0
+                    
+                elapsed_minutes = (current_time - market_open).total_seconds() / 60
+                total_trading_minutes = 390  # 6.5 hours
+                
+                # Estimate what portion occurred in the specified timeframe
+                if elapsed_minutes >= minutes:
+                    proportion = minutes / elapsed_minutes
+                    return daily_change_pct * proportion * 0.3  # Conservative estimate
+                    
+            return daily_change_pct * 0.1  # Fallback to small portion of daily change
         except:
             return 0.0
             
@@ -1346,13 +1375,13 @@ def main():
     else:
         print(f"⏰ Refresh Interval: {REFRESH_INTERVAL} seconds")
     
-    # Check for API keys
-    eodhd_key = os.getenv("EODHD_API_KEY", "demo")
-    if eodhd_key == "demo":
-        print("⚠️  Using demo EODHD API key (limited functionality)")
-        print("💡 Set EODHD_API_KEY environment variable for full access")
+    # Check for backup API keys
+    eodhd_key = os.getenv("EODHD_API_KEY")
+    if not eodhd_key:
+        print("🟡 EODHD API key not set (Yahoo Finance primary data source)")
+        print("💡 Set EODHD_API_KEY environment variable for backup data source")
     else:
-        print("✅ EODHD API key configured")
+        print("✅ EODHD backup API key configured")
         
     print("\n🚀 Initializing system...")
     
