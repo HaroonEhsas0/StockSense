@@ -15,6 +15,9 @@ Preferred communication style: Simple, everyday language.
 - Fixed TensorFlow type hint issue with Sequential class by using Any type
 - All dependencies installed and working correctly
 - Application runs successfully with real-time stock data fetching
+- **CONFIRMED: Using 100% authentic APIs** - Yahoo Finance provides real-time data without API keys
+- EODHD API available as backup (requires API key for enhanced features)
+- Real-time AMD stock tracking operational with live price updates
 - Security practices maintained with proper client/server separation
 
 ## System Architecture
