@@ -630,27 +630,30 @@ class StockPredictor:
                     current_price = stock_data.current_price
                     price_change_pct = (predicted_price - current_price) / current_price * 100
                     
-                    # Create TIGHT range with clear directional bias (max $1 range)
-                    if price_change_pct > 0.05:  # Bullish prediction (reduced threshold)
+                    # Enhanced LSTM bias detection with stronger bearish sensitivity
+                    
+                    # Check daily performance for additional context
+                    daily_change = (current_price - stock_data.previous_close) / stock_data.previous_close * 100
+                    
+                    # ENHANCED thresholds with bearish emphasis
+                    if price_change_pct > 0.08 and daily_change > -3:  # Higher threshold for UP, avoid if big daily drop
                         direction = "UP"
-                        # Very tight bullish range
-                        range_size = min(current_price * 0.003, 0.50)  # Max 50¢ range
-                        price_low = current_price - (range_size * 0.2)  # Only 20% downside
-                        price_high = current_price + (range_size * 0.8)  # 80% upside bias
+                        range_size = min(current_price * 0.003, 0.50)
+                        price_low = current_price - (range_size * 0.2)
+                        price_high = current_price + (range_size * 0.8)
                         confidence = min(80 + abs(price_change_pct) * 10, 95)
                         
-                    elif price_change_pct < -0.05:  # Bearish prediction (reduced threshold)
+                    elif price_change_pct < -0.02 or daily_change < -2:  # Much lower threshold for DOWN, or if daily drop > 2%
                         direction = "DOWN"
-                        # Very tight bearish range  
-                        range_size = min(current_price * 0.003, 0.50)  # Max 50¢ range
-                        price_low = current_price - (range_size * 0.8)  # 80% downside bias
-                        price_high = current_price + (range_size * 0.2)  # Only 20% upside
-                        confidence = min(80 + abs(price_change_pct) * 10, 95)
+                        range_size = min(current_price * 0.003, 0.50)
+                        price_low = current_price - (range_size * 0.8)  # Strong bearish bias
+                        price_high = current_price + (range_size * 0.2)
+                        # Higher confidence for bearish moves
+                        confidence = min(85 + abs(price_change_pct) * 15, 95)
                         
                     else:  # Stable prediction
                         direction = "STABLE"
-                        # Minimal range for stable prediction
-                        range_size = min(current_price * 0.002, 0.30)  # Max 30¢ range
+                        range_size = min(current_price * 0.002, 0.30)
                         price_low = current_price - (range_size / 2)
                         price_high = current_price + (range_size / 2)
                         confidence = 70
@@ -716,35 +719,56 @@ class StockPredictor:
         elif stock_data.rsi_14 < 35:  # Moderately oversold
             rsi_pressure = +0.08
             
-        # Momentum impact on range direction
-        momentum = (stock_data.price_change_15m + stock_data.price_change_30m + stock_data.price_change_1h) / 3
-        momentum_bias = momentum * 0.3  # 30% of current momentum continues
+        # Enhanced momentum calculation with stronger bearish detection
+        recent_momentum = stock_data.price_change_15m * 0.5 + stock_data.price_change_30m * 0.3 + stock_data.price_change_1h * 0.2
         
-        # Support/resistance levels based on SMA
+        # Amplify bearish signals - markets fall faster than they rise
+        if recent_momentum < -0.2:  # Strong bearish momentum
+            momentum_bias = recent_momentum * 1.5  # Amplify bearish bias
+        elif recent_momentum < 0:  # Any bearish momentum
+            momentum_bias = recent_momentum * 1.2  # Moderate amplification
+        else:  # Bullish momentum
+            momentum_bias = recent_momentum * 0.8  # Reduce bullish bias
+        
+        # Enhanced support/resistance with better bearish detection
         sma_distance = (stock_data.current_price - stock_data.sma_20) / stock_data.sma_20 * 100
-        if sma_distance > 10:  # Far above SMA - resistance expected
-            resistance_pressure = -0.12
-        elif sma_distance > 8:  # Above SMA
-            resistance_pressure = -0.06
+        
+        # Daily change pressure - if stock is down significantly today
+        daily_change_pct = (stock_data.current_price - stock_data.previous_close) / stock_data.previous_close * 100
+        daily_pressure = 0.0
+        
+        if daily_change_pct < -5:  # Down more than 5% today - strong bearish pressure
+            daily_pressure = -0.2
+        elif daily_change_pct < -2:  # Down more than 2% today
+            daily_pressure = -0.1
+        elif daily_change_pct < -1:  # Down more than 1% today
+            daily_pressure = -0.05
+        
+        # SMA resistance/support
+        if sma_distance > 2:  # Above SMA - resistance
+            sma_pressure = -0.08
+        elif sma_distance < -2:  # Below SMA - support
+            sma_pressure = 0.05
         else:
-            resistance_pressure = 0.0
+            sma_pressure = 0.0
             
         # Calculate TIGHT base range (max 50¢ total range)
         base_range_pct = max(recent_volatility * volume_multiplier, 0.08)  # Minimum 0.08%  
         base_range_pct = min(base_range_pct, 0.25)  # Maximum 0.25% (much tighter)
         
-        # Apply directional biases
-        total_bias = momentum_bias + rsi_pressure + resistance_pressure
+        # Apply ALL directional biases with emphasis on bearish signals
+        total_bias = momentum_bias + rsi_pressure + sma_pressure + daily_pressure
         
         # Calculate TIGHT price range with STRONG directional bias
         range_amount = stock_data.current_price * (base_range_pct / 100)
         max_range_dollars = 0.50  # Hard limit: 50¢ maximum range
         range_amount = min(range_amount, max_range_dollars)
         
-        if total_bias > 0.02:  # Bullish bias (lower threshold)
+        # Enhanced bias detection - prioritize daily performance for strong signals
+        if total_bias > 0.03 and daily_change_pct > -2:  # Bullish only if not big daily drop
             price_low = stock_data.current_price - (range_amount * 0.2)   # Only 20% downside
             price_high = stock_data.current_price + (range_amount * 0.8)  # 80% upside bias
-        elif total_bias < -0.02:  # Bearish bias (lower threshold)  
+        elif total_bias < -0.005 or daily_change_pct < -4:  # Much lower threshold for bearish or big daily drop
             price_low = stock_data.current_price - (range_amount * 0.8)   # 80% downside bias
             price_high = stock_data.current_price + (range_amount * 0.2)  # Only 20% upside
         else:  # Neutral - very tight range
@@ -757,16 +781,16 @@ class StockPredictor:
         self.current_30min_prediction = stable_range
         self.prediction_30m_made_at = current_time
         
-        # Determine direction based on bias (lower thresholds for clearer signals)
-        if total_bias > 0.02:
+        # Determine direction with MAXIMUM sensitivity to bearish signals
+        if total_bias > 0.05 and daily_change_pct > -2:  # Very high threshold for UP, avoid if daily drop
             self.prediction_30m_direction = "UP"
             self.prediction_30m_confidence = 75
-        elif total_bias < -0.02:
+        elif total_bias < -0.005 or daily_change_pct < -4:  # Very low threshold for DOWN or big daily drop
             self.prediction_30m_direction = "DOWN" 
-            self.prediction_30m_confidence = 75
+            self.prediction_30m_confidence = min(85, 70 + abs(total_bias) * 100)  # Much higher confidence for bearish
         else:
             self.prediction_30m_direction = "STABLE"
-            self.prediction_30m_confidence = 65
+            self.prediction_30m_confidence = 60
             
         print(f"📈 FALLBACK STABLE prediction: {self.prediction_30m_direction} | Range: ${price_low:.2f}-${price_high:.2f}")
         print(f"📌 LOCKED until {(current_time + timedelta(minutes=30)).strftime('%H:%M:%S')} (30 minutes)")
@@ -910,15 +934,18 @@ class StockPredictor:
         momentum = stock_data.price_change_15m
         rsi_signal = stock_data.rsi_14
         
-        # Simple prediction based on momentum
-        if momentum > 0.1 and rsi_signal < 70:
+        # Enhanced 1-minute prediction with better bearish detection
+        daily_change = (stock_data.current_price - stock_data.previous_close) / stock_data.previous_close * 100
+        
+        # Much more sensitive to bearish signals
+        if momentum > 0.2 and rsi_signal < 65 and daily_change > -2:  # Higher threshold for UP
             direction = "UP"
-            predicted_change_pct = momentum * 0.1  # Conservative estimate
+            predicted_change_pct = momentum * 0.08  # Less aggressive bullish
             confidence = 65
-        elif momentum < -0.1 and rsi_signal > 30:
+        elif momentum < -0.05 or daily_change < -3:  # Much lower threshold for DOWN or big daily drop
             direction = "DOWN" 
-            predicted_change_pct = momentum * 0.1
-            confidence = 65
+            predicted_change_pct = momentum * 0.15  # More aggressive bearish
+            confidence = min(75, 65 + abs(momentum) * 5)  # Higher confidence for bearish
         else:
             direction = "STABLE"
             predicted_change_pct = 0.0

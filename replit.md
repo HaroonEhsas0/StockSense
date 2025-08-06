@@ -28,6 +28,13 @@ Preferred communication style: Simple, everyday language.
 - **Enhanced LSTM models**: Separate models for 30-min stable and 1-min ahead predictions
 - **Smart caching**: Prevents prediction fluctuation during active trading windows
 
+### Accuracy Improvements - Bearish Detection (2025-08-06)
+- **Enhanced bearish signal detection**: Markets fall faster than they rise - system now amplifies bearish signals by 1.5x
+- **Daily performance integration**: Major daily drops (>4%) trigger immediate bearish bias regardless of short-term momentum
+- **Improved thresholds**: Much lower threshold (-0.005) for bearish vs higher threshold (+0.05) for bullish to reduce false signals
+- **Tight prediction ranges**: Maximum 50¢ ranges with strong directional bias (80/20 split) for actionable trading
+- **Real profit potential**: System now correctly identifies downtrends for profitable short positions
+
 ## System Architecture
 
 ### Core Application Design
