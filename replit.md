@@ -51,6 +51,13 @@ Preferred communication style: Simple, everyday language.
 - **Neutral Default State**: No directional preference when market conditions are unclear
 - **Authentic Market Reflection**: System responds equally to bullish and bearish market conditions
 
+### 30-Minute Prediction Balance Fix (2025-08-06)
+- **Fixed SMA Bias**: Changed from asymmetric (-0.08/+0.05) to equal magnitude (-0.06/+0.06) for resistance/support
+- **Removed Bearish Comments**: Eliminated "emphasis on bearish signals" and "stronger bearish sensitivity" bias indicators
+- **Lowered Equal Thresholds**: Reduced from ±0.05 to ±0.03 for both UP/DOWN direction triggers for higher sensitivity
+- **LSTM Balance**: Fixed LSTM prediction logic to have equal sensitivity for bullish and bearish movements
+- **Comprehensive Balance**: All prediction systems now treat UP and DOWN movements with identical algorithms and thresholds
+
 ## System Architecture
 
 ### Core Application Design

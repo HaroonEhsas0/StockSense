@@ -659,7 +659,7 @@ class StockPredictor:
                     current_price = stock_data.current_price
                     price_change_pct = (predicted_price - current_price) / current_price * 100
                     
-                    # Enhanced LSTM bias detection with stronger bearish sensitivity
+                    # BALANCED LSTM direction detection with equal sensitivity for both directions
                     
                     # Check daily performance for additional context
                     daily_change = (current_price - stock_data.previous_close) / stock_data.previous_close * 100
@@ -753,7 +753,7 @@ class StockPredictor:
         # Equal treatment for both directions - let the data decide
         momentum_bias = recent_momentum  # No artificial amplification
         
-        # Enhanced support/resistance with better bearish detection
+        # BALANCED support/resistance analysis - equal treatment for both directions
         sma_distance = (stock_data.current_price - stock_data.sma_20) / stock_data.sma_20 * 100
         
         # BALANCED daily change pressure - treat up and down movements equally  
@@ -774,11 +774,11 @@ class StockPredictor:
         elif daily_change_pct < -1:  # Down more than 1% today
             daily_pressure = -0.04
         
-        # SMA resistance/support
-        if sma_distance > 2:  # Above SMA - resistance
-            sma_pressure = -0.08
-        elif sma_distance < -2:  # Below SMA - support
-            sma_pressure = 0.05
+        # BALANCED SMA resistance/support - equal treatment for both directions
+        if sma_distance > 2:  # Above SMA - resistance (equal magnitude)
+            sma_pressure = -0.06
+        elif sma_distance < -2:  # Below SMA - support (equal magnitude)
+            sma_pressure = +0.06
         else:
             sma_pressure = 0.0
             
@@ -786,7 +786,7 @@ class StockPredictor:
         base_range_pct = max(recent_volatility * volume_multiplier, 0.08)  # Minimum 0.08%  
         base_range_pct = min(base_range_pct, 0.25)  # Maximum 0.25% (much tighter)
         
-        # Apply ALL directional biases with emphasis on bearish signals
+        # Apply ALL directional biases with EQUAL treatment for both directions
         total_bias = momentum_bias + rsi_pressure + sma_pressure + daily_pressure
         
         # Calculate TIGHT price range with STRONG directional bias
@@ -811,10 +811,10 @@ class StockPredictor:
         self.prediction_30m_made_at = current_time
         
         # BALANCED direction determination with equal thresholds
-        if total_bias > 0.05:  # Bullish
+        if total_bias > 0.03:  # Bullish (lowered threshold for equal sensitivity)
             self.prediction_30m_direction = "UP"
             self.prediction_30m_confidence = min(85, 70 + abs(total_bias) * 50)
-        elif total_bias < -0.05:  # Bearish (equal threshold)
+        elif total_bias < -0.03:  # Bearish (equal threshold and sensitivity)
             self.prediction_30m_direction = "DOWN" 
             self.prediction_30m_confidence = min(85, 70 + abs(total_bias) * 50)
         else:
