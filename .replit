@@ -35,3 +35,6 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "pip install yfinance scikit-learn pandas numpy requests && python stock_predictor.py"
+
+[agent]
+expertMode = true

@@ -12,7 +12,7 @@ import requests
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass
 
 try:
@@ -468,7 +468,7 @@ class StockPredictor:
         
         return stop_loss, take_profit, risk_reward_ratio
 
-    def build_lstm_model(self, sequence_length: int = 60) -> Sequential:
+    def build_lstm_model(self, sequence_length: int = 60) -> Any:
         """Build LSTM model for stable 30-minute predictions"""
         if not LSTM_AVAILABLE:
             return None
