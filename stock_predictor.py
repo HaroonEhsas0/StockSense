@@ -630,28 +630,30 @@ class StockPredictor:
                     current_price = stock_data.current_price
                     price_change_pct = (predicted_price - current_price) / current_price * 100
                     
-                    # Create narrow, accurate range based on prediction confidence
-                    if price_change_pct > 0.1:  # Bullish prediction
+                    # Create TIGHT range with clear directional bias (max $1 range)
+                    if price_change_pct > 0.05:  # Bullish prediction (reduced threshold)
                         direction = "UP"
-                        # Narrow range with bullish bias
-                        price_low = current_price - (current_price * 0.002)  # 0.2% downside
-                        price_high = predicted_price + (predicted_price * 0.003)  # Small buffer above prediction
-                        confidence = min(75 + abs(price_change_pct) * 5, 95)
+                        # Very tight bullish range
+                        range_size = min(current_price * 0.003, 0.50)  # Max 50¢ range
+                        price_low = current_price - (range_size * 0.2)  # Only 20% downside
+                        price_high = current_price + (range_size * 0.8)  # 80% upside bias
+                        confidence = min(80 + abs(price_change_pct) * 10, 95)
                         
-                    elif price_change_pct < -0.1:  # Bearish prediction  
+                    elif price_change_pct < -0.05:  # Bearish prediction (reduced threshold)
                         direction = "DOWN"
-                        # Narrow range with bearish bias
-                        price_low = predicted_price - (predicted_price * 0.003)  # Small buffer below prediction
-                        price_high = current_price + (current_price * 0.002)  # 0.2% upside
-                        confidence = min(75 + abs(price_change_pct) * 5, 95)
+                        # Very tight bearish range  
+                        range_size = min(current_price * 0.003, 0.50)  # Max 50¢ range
+                        price_low = current_price - (range_size * 0.8)  # 80% downside bias
+                        price_high = current_price + (range_size * 0.2)  # Only 20% upside
+                        confidence = min(80 + abs(price_change_pct) * 10, 95)
                         
                     else:  # Stable prediction
                         direction = "STABLE"
-                        # Very narrow range around current price
-                        range_size = current_price * 0.003  # 0.3% total range
-                        price_low = current_price - range_size
-                        price_high = current_price + range_size
-                        confidence = 65
+                        # Minimal range for stable prediction
+                        range_size = min(current_price * 0.002, 0.30)  # Max 30¢ range
+                        price_low = current_price - (range_size / 2)
+                        price_high = current_price + (range_size / 2)
+                        confidence = 70
                     
                     # Cache the stable prediction
                     stable_range = (round(price_low, 2), round(price_high, 2))
@@ -727,41 +729,44 @@ class StockPredictor:
         else:
             resistance_pressure = 0.0
             
-        # Calculate base range (typical 30-min movement)
-        base_range_pct = max(recent_volatility * volume_multiplier, 0.15)  # Minimum 0.15%
-        base_range_pct = min(base_range_pct, 0.8)  # Maximum 0.8%
+        # Calculate TIGHT base range (max 50¢ total range)
+        base_range_pct = max(recent_volatility * volume_multiplier, 0.08)  # Minimum 0.08%  
+        base_range_pct = min(base_range_pct, 0.25)  # Maximum 0.25% (much tighter)
         
         # Apply directional biases
         total_bias = momentum_bias + rsi_pressure + resistance_pressure
         
-        # Calculate price range
+        # Calculate TIGHT price range with STRONG directional bias
         range_amount = stock_data.current_price * (base_range_pct / 100)
+        max_range_dollars = 0.50  # Hard limit: 50¢ maximum range
+        range_amount = min(range_amount, max_range_dollars)
         
-        if total_bias > 0:  # Bullish bias
-            price_low = stock_data.current_price - (range_amount * 0.3)
-            price_high = stock_data.current_price + (range_amount * 1.2)
-        elif total_bias < -0.1:  # Bearish bias
-            price_low = stock_data.current_price - (range_amount * 1.2)
-            price_high = stock_data.current_price + (range_amount * 0.3)
-        else:  # Neutral
-            price_low = stock_data.current_price - range_amount
-            price_high = stock_data.current_price + range_amount
+        if total_bias > 0.02:  # Bullish bias (lower threshold)
+            price_low = stock_data.current_price - (range_amount * 0.2)   # Only 20% downside
+            price_high = stock_data.current_price + (range_amount * 0.8)  # 80% upside bias
+        elif total_bias < -0.02:  # Bearish bias (lower threshold)  
+            price_low = stock_data.current_price - (range_amount * 0.8)   # 80% downside bias
+            price_high = stock_data.current_price + (range_amount * 0.2)  # Only 20% upside
+        else:  # Neutral - very tight range
+            tight_range = min(range_amount * 0.5, 0.25)  # Max 25¢ for neutral
+            price_low = stock_data.current_price - tight_range
+            price_high = stock_data.current_price + tight_range
             
         # Cache the stable prediction for 30 minutes
         stable_range = (round(price_low, 2), round(price_high, 2))
         self.current_30min_prediction = stable_range
         self.prediction_30m_made_at = current_time
         
-        # Determine direction based on bias
-        if total_bias > 0.05:
+        # Determine direction based on bias (lower thresholds for clearer signals)
+        if total_bias > 0.02:
             self.prediction_30m_direction = "UP"
-            self.prediction_30m_confidence = 70
-        elif total_bias < -0.05:
+            self.prediction_30m_confidence = 75
+        elif total_bias < -0.02:
             self.prediction_30m_direction = "DOWN" 
-            self.prediction_30m_confidence = 70
+            self.prediction_30m_confidence = 75
         else:
             self.prediction_30m_direction = "STABLE"
-            self.prediction_30m_confidence = 60
+            self.prediction_30m_confidence = 65
             
         print(f"📈 FALLBACK STABLE prediction: {self.prediction_30m_direction} | Range: ${price_low:.2f}-${price_high:.2f}")
         print(f"📌 LOCKED until {(current_time + timedelta(minutes=30)).strftime('%H:%M:%S')} (30 minutes)")
@@ -1160,19 +1165,46 @@ class StockPredictor:
             print(f"   Expected Range:    ${low:.2f} - ${high:.2f}")
             print(f"   Range Size:        ${range_size:.2f} (~{profit_potential:.0f}¢ max profit)")
             
-            # Direction bias within range
+            # Direction bias within range (using cached direction for clarity)
             current_position = (stock_data.current_price - low) / (high - low) * 100 if range_size > 0 else 50
-            if current_position < 30:
-                bias = "🟢 Near bottom (bullish bias)"
-                recommendation = "📈 Expected to move UP"
-            elif current_position > 70:
-                bias = "🔴 Near top (bearish bias)"
-                recommendation = "📉 Expected to move DOWN"
+            
+            # Use the cached 30-min prediction direction for consistent messaging
+            if hasattr(self, 'prediction_30m_direction') and self.prediction_30m_direction:
+                if self.prediction_30m_direction == "UP":
+                    bias = "🟢 Bullish bias"
+                    recommendation = "📈 Expected to move UP"
+                    if current_position > 60:
+                        position_text = f"🔥 {current_position:.0f}% in range (good sell opportunity)"
+                    else:
+                        position_text = f"{current_position:.0f}% in range (hold/buy opportunity)"
+                elif self.prediction_30m_direction == "DOWN":
+                    bias = "🔴 Bearish bias"
+                    recommendation = "📉 Expected to move DOWN"
+                    if current_position < 40:
+                        position_text = f"🔥 {current_position:.0f}% in range (good buy opportunity)"
+                    else:
+                        position_text = f"{current_position:.0f}% in range (sell opportunity)"
+                else:
+                    bias = "🟡 Stable"
+                    recommendation = "➡️ Minimal movement expected"
+                    position_text = f"{current_position:.0f}% in range (neutral)"
             else:
-                bias = "🟡 Mid-range (neutral)"
-                recommendation = "➡️ Sideways movement expected"
-            print(f"   Current Position:  {current_position:.0f}% in range ({bias})")
+                # Fallback to old logic if no cached direction
+                if current_position < 30:
+                    bias = "🟢 Near bottom (bullish bias)"
+                    recommendation = "📈 Expected to move UP"
+                elif current_position > 70:
+                    bias = "🔴 Near top (bearish bias)"
+                    recommendation = "📉 Expected to move DOWN"
+                else:
+                    bias = "🟡 Mid-range"
+                    recommendation = "➡️ Sideways movement expected"
+                position_text = f"{current_position:.0f}% in range ({bias})"
+                
+            print(f"   Current Position:  {position_text}")
             print(f"   30-min Direction:  {recommendation}")
+            if hasattr(self, 'prediction_30m_confidence') and self.prediction_30m_confidence:
+                print(f"   Confidence:        {self.prediction_30m_confidence}%")
             
         # 1-minute ahead prediction
         minute_prediction = self.predict_1minute_ahead(stock_data)
