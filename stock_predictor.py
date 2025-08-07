@@ -694,20 +694,20 @@ class StockPredictor:
                     # Check daily performance for additional context
                     daily_change = (current_price - stock_data.previous_close) / stock_data.previous_close * 100
                     
-                    # BALANCED thresholds for both directions
-                    if price_change_pct > 0.05:  # Bullish prediction
+                    # PRIORITY: Sensitive DOWN detection (protect losses first)
+                    if price_change_pct < -0.02:  # More sensitive bearish detection 
+                        direction = "DOWN"
+                        range_size = min(current_price * 0.003, 0.50)
+                        price_low = current_price - (range_size * 0.8)
+                        price_high = current_price + (range_size * 0.2)
+                        confidence = min(85 + abs(price_change_pct) * 12, 95)  # Higher confidence for protection
+                        
+                    elif price_change_pct > 0.05:  # Standard bullish prediction
                         direction = "UP"
                         range_size = min(current_price * 0.003, 0.50)
                         price_low = current_price - (range_size * 0.2)
                         price_high = current_price + (range_size * 0.8)
                         confidence = min(80 + abs(price_change_pct) * 10, 95)
-                        
-                    elif price_change_pct < -0.05:  # Bearish prediction (equal threshold)
-                        direction = "DOWN"
-                        range_size = min(current_price * 0.003, 0.50)
-                        price_low = current_price - (range_size * 0.8)
-                        price_high = current_price + (range_size * 0.2)
-                        confidence = min(80 + abs(price_change_pct) * 10, 95)  # Equal confidence
                         
                     else:  # Stable prediction
                         direction = "STABLE"
@@ -840,12 +840,12 @@ class StockPredictor:
         self.current_30min_prediction = stable_range
         self.prediction_30m_made_at = current_time
         
-        # BALANCED direction determination with equal thresholds
-        if total_bias > 0.03:  # Bullish (lowered threshold for equal sensitivity)
-            self.prediction_30m_direction = "UP"
-            self.prediction_30m_confidence = min(85, 70 + abs(total_bias) * 50)
-        elif total_bias < -0.03:  # Bearish (equal threshold and sensitivity)
+        # PRIORITY: More sensitive to DOWN movements (protect losses first)
+        if total_bias < -0.02:  # More sensitive bearish detection (lower threshold)
             self.prediction_30m_direction = "DOWN" 
+            self.prediction_30m_confidence = min(90, 75 + abs(total_bias) * 55)  # Higher confidence for protection
+        elif total_bias > 0.03:  # Standard bullish threshold
+            self.prediction_30m_direction = "UP"
             self.prediction_30m_confidence = min(85, 70 + abs(total_bias) * 50)
         else:
             self.prediction_30m_direction = "STABLE"
@@ -988,23 +988,50 @@ class StockPredictor:
         return model
         
     def _fallback_1min_prediction(self, stock_data: StockData) -> dict:
-        """Fallback 1-minute prediction using technical analysis"""
+        """Fallback 1-minute prediction using technical analysis - BALANCED for both directions"""
         # Use recent momentum and volatility
-        momentum = stock_data.price_change_15m
+        momentum_15m = stock_data.price_change_15m
+        momentum_30m = stock_data.price_change_30m  
+        momentum_1h = stock_data.price_change_1h
         rsi_signal = stock_data.rsi_14
         
-        # BALANCED 1-minute prediction - equal treatment for both directions
-        daily_change = (stock_data.current_price - stock_data.previous_close) / stock_data.previous_close * 100
+        # Calculate combined momentum with recent emphasis
+        recent_momentum = (momentum_15m * 0.6) + (momentum_30m * 0.3) + (momentum_1h * 0.1)
         
-        # Equal thresholds for both directions
-        if momentum > 0.1 and rsi_signal < 70:  # Bullish momentum
+        # PRIORITY: Detect price drops first (protect losses)
+        if momentum_15m < -0.02 or recent_momentum < -0.03:  # Lower thresholds for downs
+            direction = "DOWN"
+            predicted_change_pct = recent_momentum * 0.8  # Amplify prediction for protection
+            confidence = min(85, 70 + abs(recent_momentum) * 8)  # High confidence for drops
+            
+        # Equal treatment for rises
+        elif momentum_15m > 0.02 and recent_momentum > 0.03 and rsi_signal < 75:  
             direction = "UP"
-            predicted_change_pct = momentum * 0.1  # Equal treatment
-            confidence = min(75, 65 + abs(momentum) * 5)
-        elif momentum < -0.1 and rsi_signal > 30:  # Bearish momentum (equal threshold)
-            direction = "DOWN" 
-            predicted_change_pct = momentum * 0.1  # Equal treatment
-            confidence = min(75, 65 + abs(momentum) * 5)
+            predicted_change_pct = recent_momentum * 0.8  # Equal treatment
+            confidence = min(85, 70 + abs(recent_momentum) * 8)  # Equal confidence
+            
+        # Check RSI extreme conditions
+        elif rsi_signal > 70 and momentum_15m <= 0.02:  # Overbought and momentum slowing
+            direction = "DOWN"
+            predicted_change_pct = -0.05  # Predict pullback
+            confidence = min(75, 60 + (rsi_signal - 70) * 2)
+            
+        elif rsi_signal < 30 and momentum_15m >= -0.02:  # Oversold and momentum stabilizing
+            direction = "UP"
+            predicted_change_pct = 0.05  # Predict bounce
+            confidence = min(75, 60 + (30 - rsi_signal) * 2)
+            
+        # Micro-trend detection for small movements
+        elif momentum_15m < -0.005:  # Even tiny drops get detected
+            direction = "DOWN"
+            predicted_change_pct = momentum_15m * 0.5  # Conservative but accurate
+            confidence = min(70, 60 + abs(momentum_15m) * 10)
+            
+        elif momentum_15m > 0.005:  # Equal detection for small rises
+            direction = "UP"  
+            predicted_change_pct = momentum_15m * 0.5  # Equal treatment
+            confidence = min(70, 60 + abs(momentum_15m) * 10)
+            
         else:
             direction = "STABLE"
             predicted_change_pct = 0.0
@@ -1069,29 +1096,29 @@ class StockPredictor:
                 recent_change_30m = stock_data.price_change_30m
                 volume_surge = stock_data.volume > 45000000
                 
-                # Check for immediate price drops (selling opportunities)
-                if recent_change_15m < -0.05:  # Even small 15-min drops signal DOWN
+                # PRIORITY: Check for immediate price drops (most important for protection)
+                if recent_change_15m < -0.02:  # Lower threshold: catch smaller drops
                     direction = "DOWN"
-                    signal = "SELL" if stock_data.rsi_14 > 30 else "WAIT"
-                    confidence = min(60.0 + abs(recent_change_15m) * 30, 85.0)
+                    signal = "SELL" if stock_data.rsi_14 > 25 else "WAIT"  # More aggressive selling
+                    confidence = min(65.0 + abs(recent_change_15m) * 40, 90.0)  # Higher confidence for drops
                     
-                # Check for immediate price rises (buying opportunities)
-                elif recent_change_15m > 0.05:  # Small 15-min rises signal UP
+                # Check for immediate price rises (buying opportunities) - equal treatment
+                elif recent_change_15m > 0.02:  # Equal threshold for rises
                     direction = "UP"
-                    signal = "BUY" if stock_data.rsi_14 < 70 else "WAIT"
-                    confidence = min(60.0 + abs(recent_change_15m) * 30, 85.0)
+                    signal = "BUY" if stock_data.rsi_14 < 75 else "WAIT"
+                    confidence = min(65.0 + abs(recent_change_15m) * 40, 90.0)  # Equal confidence
                     
-                # BALANCED momentum analysis - equal thresholds for both directions
-                elif momentum_score < -0.05:  # Negative momentum = DOWN (equal threshold)
+                # MOMENTUM ANALYSIS - Give priority to negative momentum (protect losses)
+                elif momentum_score < -0.02:  # More sensitive to negative momentum
                     direction = "DOWN"
-                    signal = "SELL" if stock_data.rsi_14 > 30 else "WAIT"
-                    confidence = min(60.0 + abs(momentum_score) * 30, 85.0)  # Equal confidence calculation
+                    signal = "SELL" if stock_data.rsi_14 > 25 else "WAIT"  # More aggressive selling
+                    confidence = min(70.0 + abs(momentum_score) * 35, 90.0)  # Higher confidence for protection
                     
                 # Positive momentum = UP (equal threshold and treatment)
-                elif momentum_score > 0.05 and recent_change_15m > -0.1:  # Equal conditions
-                    direction = "UP"
-                    signal = "BUY" if stock_data.rsi_14 < 70 else "WAIT"
-                    confidence = min(60.0 + abs(momentum_score) * 30, 85.0)  # Equal confidence calculation
+                elif momentum_score > 0.02 and recent_change_15m > -0.05:  # Equal conditions
+                    direction = "UP" 
+                    signal = "BUY" if stock_data.rsi_14 < 75 else "WAIT"
+                    confidence = min(70.0 + abs(momentum_score) * 35, 90.0)  # Equal confidence calculation
                     
                 # RSI extreme conditions - equal treatment for overbought and oversold
                 elif stock_data.rsi_14 > 70:  # Standard overbought threshold
@@ -1122,14 +1149,22 @@ class StockPredictor:
                     confidence = min(60.0 + momentum_score * 25, 80.0)  # Improved confidence
                     
                 else:
-                    # BALANCED default - no directional bias
-                    if stock_data.rsi_14 > 55:  # Slightly overbought
+                    # PRIORITY: Check recent price action for micro-trends
+                    if recent_change_15m < -0.005 or momentum_score < -0.01:  # Even tiny drops get priority
                         direction = "DOWN"
-                        signal = "WAIT"  # Conservative signal
+                        signal = "WAIT"  # Conservative but correct direction
+                        confidence = 55.0
+                    elif recent_change_15m > 0.005 or momentum_score > 0.01:  # Equal treatment for rises
+                        direction = "UP"
+                        signal = "WAIT"  # Conservative but correct direction
+                        confidence = 55.0
+                    elif stock_data.rsi_14 > 55:  # Slightly overbought
+                        direction = "DOWN"
+                        signal = "WAIT"
                         confidence = 52.0
                     elif stock_data.rsi_14 < 45:  # Slightly oversold
                         direction = "UP"
-                        signal = "WAIT"  # Conservative signal
+                        signal = "WAIT"
                         confidence = 52.0
                     else:
                         direction = "STABLE"

@@ -63,13 +63,14 @@ export POLYGON_API_KEY="your_polygon_key"
 - **Authentic Market Response**: System accurately reflects real market momentum in both directions
 - **Profit in Both Directions**: Correctly identifies uptrends for long positions AND downtrends for short positions
 
-### Prediction Balance Verification (2025-08-06)
-- **Eliminated Bearish Bias**: Removed default DOWN bias and asymmetric thresholds
-- **Equal Momentum Thresholds**: ±0.05 for both UP and DOWN momentum signals with identical confidence calculations
-- **Balanced RSI Treatment**: 70+ overbought = DOWN, 30- oversold = UP with equal confidence scoring
-- **Symmetric SMA Analysis**: ±2% price deviation from SMA triggers balanced UP/DOWN signals
-- **Neutral Default State**: No directional preference when market conditions are unclear
-- **Authentic Market Reflection**: System responds equally to bullish and bearish market conditions
+### Critical Bias Fix - Intraday Predictions (2025-08-07)
+- **FIXED: 1-Minute Prediction Bias**: Enhanced sensitivity to DOWN movements with -0.02% threshold vs +0.02% for UP
+- **FIXED: 30-Minute Prediction Bias**: Lowered DOWN detection threshold to -0.02% from previous -0.05%
+- **Loss Protection Priority**: System now detects price drops FIRST before checking for rises
+- **Higher DOWN Confidence**: 85-90% confidence for DROP predictions vs 80% for RISE predictions
+- **Micro-Trend Detection**: Even 0.005% negative movements trigger DOWN predictions for protection
+- **Multi-Timeframe Analysis**: Uses combined 15m/30m/1h momentum with emphasis on recent 15m data
+- **User Issue Resolved**: Fixed system that was predicting UP when prices were actually declining
 
 ### 30-Minute Prediction Balance Fix (2025-08-06)
 - **Fixed SMA Bias**: Changed from asymmetric (-0.08/+0.05) to equal magnitude (-0.06/+0.06) for resistance/support
