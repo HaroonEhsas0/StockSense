@@ -335,6 +335,13 @@ class StockPredictor:
             stock_data.rsi_14,
             stock_data.volume / 1000000,  # Volume in millions
             (stock_data.day_high - stock_data.day_low) / stock_data.current_price * 100,  # Daily volatility
+            stock_data.price_change_15m,
+            stock_data.price_change_30m,
+            stock_data.price_change_1h,
+            # Price relative to SMA
+            (stock_data.current_price - stock_data.sma_20) / stock_data.sma_20 * 100,
+            # Volatility indicator
+            abs(stock_data.price_change_15m) + abs(stock_data.price_change_30m) + abs(stock_data.price_change_1h)
         ]
         return np.array(features).reshape(1, -1)
         
